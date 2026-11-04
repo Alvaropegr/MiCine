@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.MiCine" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/acento</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#5C1D20</item>
+        <item name="colorOnPrimaryContainer">#FFDAD9</item>
+        <item name="colorSecondary">@color/acento</item>
+        <item name="colorSecondaryContainer">#3A1A1C</item>
+        <item name="colorOnSecondaryContainer">#FFDAD9</item>
+        <item name="android:colorBackground">@color/fondo</item>
+        <item name="colorSurface">@color/fondo</item>
+        <item name="colorOnSurface">@color/texto</item>
+        <item name="colorOnSurfaceVariant">@color/tenue</item>
+        <item name="colorSurfaceContainer">@color/panel</item>
+        <item name="colorSurfaceContainerHigh">@color/panel2</item>
+        <item name="colorOutline">@color/borde</item>
+        <item name="colorError">@color/error</item>
+        <item name="android:windowBackground">@color/fondo</item>
+        <!-- Con el mando de la tele, lo elegido tiene que verse bien desde el sofá. -->
+        <item name="selectableItemBackground">@drawable/fondo_foco</item>
+        <item name="selectableItemBackgroundBorderless">@drawable/fondo_foco_redondo</item>
+        <item name="actionBarItemBackground">@drawable/fondo_foco_redondo</item>
+        <item name="materialButtonStyle">@style/Widget.MiCine.Button</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.MiCine.Dialogo</item>
+    </style>
+
+    <style name="Theme.MiCine.Reproductor">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+
+    <style name="Widget.MiCine.Button" parent="Widget.Material3.Button">
+        <item name="strokeColor">@color/borde_foco</item>
+        <item name="strokeWidth">3dp</item>
+    </style>
+
+    <style name="Widget.MiCine.Button.TextButton" parent="Widget.Material3.Button.TextButton">
+        <item name="backgroundTint">@color/fondo_boton_texto</item>
+        <item name="strokeColor">@color/borde_foco</item>
+        <item name="strokeWidth">2dp</item>
+    </style>
+
+    <style name="Widget.MiCine.Button.TextButton.Dialogo" parent="Widget.Material3.Button.TextButton.Dialog">
+        <item name="backgroundTint">@color/fondo_boton_texto</item>
+        <item name="strokeColor">@color/borde_foco</item>
+        <item name="strokeWidth">2dp</item>
+    </style>
+
+    <style name="ThemeOverlay.MiCine.Dialogo" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="buttonBarPositiveButtonStyle">@style/Widget.MiCine.Button.TextButton.Dialogo</item>
+        <item name="buttonBarNegativeButtonStyle">@style/Widget.MiCine.Button.TextButton.Dialogo</item>
+        <item name="buttonBarNeutralButtonStyle">@style/Widget.MiCine.Button.TextButton.Dialogo</item>
+    </style>
+
+    <style name="BotonReproductor">
+        <item name="android:layout_width">48dp</item>
+        <item name="android:layout_height">48dp</item>
+        <item name="android:padding">12dp</item>
+        <item name="android:scaleType">fitCenter</item>
+        <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
+        <item name="android:focusable">true</item>
+        <item name="tint">#FFFFFF</item>
+    </style>
+</resources>

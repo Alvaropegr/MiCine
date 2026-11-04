@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Borde de los botones: solo se ve cuando están elegidos con el mando. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:color="#FFFFFF" android:state_focused="true" />
+    <item android:color="@android:color/transparent" />
+</selector>

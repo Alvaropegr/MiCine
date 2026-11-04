@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Fondo de filas y botones: el toque hace la onda de siempre y, con el mando, el elemento elegido se recuadra en blanco. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android" android:color="#33FFFFFF">
+    <item android:id="@android:id/mask">
+        <shape>
+            <solid android:color="#FFFFFF" />
+            <corners android:radius="10dp" />
+        </shape>
+    </item>
+    <item>
+        <selector>
+            <item android:state_focused="true">
+                <shape>
+                    <solid android:color="#1FFFFFFF" />
+                    <stroke android:width="3dp" android:color="#FFFFFF" />
+                    <corners android:radius="10dp" />
+                </shape>
+            </item>
+        </selector>
+    </item>
+</ripple>

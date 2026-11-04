@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <inset android:insetBottom="6dp" android:insetLeft="2dp" android:insetRight="2dp" android:insetTop="6dp">
+            <shape>
+                <solid android:color="#26FFFFFF" />
+                <stroke android:width="3dp" android:color="#FFFFFF" />
+                <corners android:radius="10dp" />
+            </shape>
+        </inset>
+    </item>
+    <item android:drawable="@android:color/transparent" />
+</selector>

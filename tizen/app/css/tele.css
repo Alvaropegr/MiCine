@@ -1,0 +1,289 @@
+/* MiCine para la tele. Medidas en píxeles de una pantalla de 1920×1080.
+   Sin variables CSS ni rejillas: las teles de 2015-2017 no las entienden. */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%; height: 100%; overflow: hidden;
+  background: #0b0b0f; color: #f2f2f5;
+  font-family: "SamsungOne", "Samsung Sans", Roboto, "Segoe UI", Arial, sans-serif;
+  font-size: 30px;
+}
+
+/* El vídeo de la tele se dibuja POR DEBAJO de la página: mientras se reproduce, nada puede tener fondo. */
+html.reproduciendo, html.reproduciendo body { background: transparent; }
+
+#raiz {
+  position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; overflow: hidden;
+  -webkit-transform-origin: 0 0; transform-origin: 0 0;
+}
+#pantallas, #capas, .pantalla { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+#capas { pointer-events: none; }
+#capas > * { pointer-events: auto; }
+.pantalla { overflow: hidden; }
+
+.icono { width: 1em; height: 1em; vertical-align: middle; }
+
+/* ── Botones y campos ─────────────────────────────────────────────── */
+
+.boton {
+  display: inline-block; padding: 18px 40px; border-radius: 12px;
+  background: rgba(255, 255, 255, .14); color: #f2f2f5;
+  font-size: 32px; font-weight: bold; white-space: nowrap;
+  -webkit-transition: background .15s, color .15s; transition: background .15s, color .15s;
+}
+.boton .icono { width: 38px; height: 38px; margin: -6px 16px 0 -6px; }
+.boton.foco { background: #f2f2f5; color: #0b0b0f; }
+
+.campo {
+  display: block; background: #17171d; border: 4px solid #2c2c35; border-radius: 12px;
+  padding: 12px 24px; margin-bottom: 18px;
+}
+.campo label { display: block; font-size: 22px; color: #a3a3ad; margin-bottom: 4px; }
+.campo input {
+  display: block; width: 100%; background: transparent; border: 0; outline: 0;
+  color: #f2f2f5; font-size: 36px; font-family: inherit;
+}
+.campo.foco { border-color: #f2f2f5; background: #22222a; }
+
+.logo { font-size: 46px; font-weight: bold; color: #f2f2f5; white-space: nowrap; }
+.logo-icono {
+  display: inline-block; width: 58px; height: 58px; border-radius: 15px; background: #e5484d;
+  text-align: center; margin-right: 16px; vertical-align: middle; color: #fff;
+}
+.logo-icono .icono { width: 30px; height: 30px; margin-top: 13px; margin-left: 4px; }
+
+/* ── Conectar ─────────────────────────────────────────────────────── */
+
+.conectar .panel { position: absolute; left: 460px; top: 70px; width: 1000px; }
+.conectar h1 { font-size: 56px; margin: 36px 0 12px; }
+.ayuda { color: #a3a3ad; font-size: 28px; line-height: 1.4; margin-bottom: 30px; }
+.formulario .boton { display: block; text-align: center; margin-bottom: 18px; }
+.mensaje { min-height: 44px; margin-top: 8px; font-size: 28px; line-height: 1.4; color: #a3a3ad; }
+.mensaje.error { color: #ff8a8d; }
+
+/* ── Inicio ───────────────────────────────────────────────────────── */
+
+.fondo-difuso {
+  position: absolute; left: -100px; top: -100px; width: 2120px; height: 1000px;
+  object-fit: cover; -webkit-filter: blur(50px); filter: blur(50px);
+  opacity: 0; -webkit-transition: opacity .5s; transition: opacity .5s;
+}
+.fondo-difuso.lista { opacity: .4; }
+
+.velo {
+  position: absolute; left: 0; top: 0; width: 1920px; height: 1080px;
+  background: -webkit-linear-gradient(top, rgba(11, 11, 15, .25) 0%, rgba(11, 11, 15, .8) 45%, #0b0b0f 60%);
+  background: linear-gradient(to bottom, rgba(11, 11, 15, .25) 0%, rgba(11, 11, 15, .8) 45%, #0b0b0f 60%);
+}
+
+.menu { position: absolute; left: 96px; top: 40px; width: 1728px; height: 70px; }
+.menu .logo { position: absolute; left: 0; top: 0; }
+.menu-items { position: absolute; right: 0; top: 4px; white-space: nowrap; }
+.menu-item {
+  display: inline-block; margin-left: 18px; padding: 10px 28px; border-radius: 40px;
+  font-size: 28px; color: #d0d0d6;
+}
+.menu-item .icono { width: 30px; height: 30px; margin: -4px 12px 0 0; }
+.menu-item.foco { background: #f2f2f5; color: #0b0b0f; }
+
+.heroe { position: absolute; left: 96px; top: 170px; width: 1200px; }
+.heroe h1, .detalle h1 {
+  font-size: 76px; line-height: 1.1; max-height: 170px; overflow: hidden;
+  text-shadow: 0 4px 24px rgba(0, 0, 0, .6);
+}
+.meta { margin-top: 18px; font-size: 30px; color: #d0d0d6; }
+.info { margin-top: 12px; font-size: 28px; line-height: 1.4; color: #a3a3ad; }
+.progreso { margin-top: 24px; font-size: 26px; color: #d0d0d6; }
+.progreso .barra {
+  display: inline-block; vertical-align: middle; width: 300px; height: 8px; margin-right: 20px;
+  background: rgba(255, 255, 255, .25); border-radius: 4px; overflow: hidden;
+}
+.progreso .barra div { height: 100%; background: #e5484d; }
+.vista .icono { width: 30px; height: 30px; color: #4ade80; margin: -4px 10px 0 0; }
+
+.heroe-arte, .detalle-arte {
+  position: absolute; border-radius: 14px; box-shadow: 0 30px 60px rgba(0, 0, 0, .6);
+  opacity: 0; -webkit-transition: opacity .3s; transition: opacity .3s;
+}
+.heroe-arte { right: 150px; top: 120px; width: 287px; height: 430px; }
+.heroe-arte.lista, .detalle-arte.lista { opacity: 1; }
+
+.filas { position: absolute; left: 0; top: 600px; width: 1920px; height: 480px; overflow: hidden; }
+.filas-pista, .fila-tarjetas, .rejilla {
+  -webkit-transition: -webkit-transform .3s; transition: transform .3s;
+}
+.fila { height: 420px; }
+.fila-titulo { margin-left: 96px; height: 60px; line-height: 60px; font-size: 34px; font-weight: bold; }
+.fila-tarjetas { white-space: nowrap; padding-left: 96px; }
+
+.tarjeta {
+  display: inline-block; position: relative; vertical-align: top; white-space: normal;
+  width: 200px; height: 300px; margin: 16px 28px 0 0; border-radius: 10px; overflow: hidden;
+  background: #22222a;
+  -webkit-transition: -webkit-transform .2s, box-shadow .2s; transition: transform .2s, box-shadow .2s;
+}
+.tarjeta img {
+  position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+  opacity: 0; -webkit-transition: opacity .3s; transition: opacity .3s;
+}
+.tarjeta img.lista { opacity: 1; }
+.tarjeta-titulo {
+  position: absolute; left: 16px; right: 16px; bottom: 30px;
+  font-size: 26px; font-weight: bold; line-height: 1.25; color: #d0d0d6;
+}
+.tarjeta-barra { position: absolute; left: 0; bottom: 0; width: 100%; height: 8px; background: rgba(255, 255, 255, .3); }
+.tarjeta-barra div { height: 100%; background: #e5484d; }
+.tarjeta-vista {
+  position: absolute; right: 10px; top: 10px; width: 42px; height: 42px; border-radius: 21px;
+  background: rgba(0, 0, 0, .7); color: #4ade80; text-align: center;
+}
+.tarjeta-vista .icono { width: 26px; height: 26px; margin-top: 8px; }
+.tarjeta.foco {
+  -webkit-transform: scale(1.12); transform: scale(1.12); z-index: 2;
+  box-shadow: 0 0 0 5px #f2f2f5, 0 18px 40px rgba(0, 0, 0, .7);
+}
+
+/* ── Ficha ────────────────────────────────────────────────────────── */
+
+.detalle .velo {
+  background: -webkit-linear-gradient(left, #0b0b0f 0%, rgba(11, 11, 15, .85) 55%, rgba(11, 11, 15, .45) 100%);
+  background: linear-gradient(to right, #0b0b0f 0%, rgba(11, 11, 15, .85) 55%, rgba(11, 11, 15, .45) 100%);
+}
+.detalle-arte { right: 150px; top: 120px; width: 560px; height: 840px; }
+.detalle-texto { position: absolute; left: 96px; top: 170px; width: 1000px; }
+.detalle h1 { font-size: 80px; max-height: 270px; }
+.detalle .botones { margin-top: 56px; }
+.detalle .botones .boton { display: block; width: 640px; margin-bottom: 20px; }
+
+/* ── Buscar ───────────────────────────────────────────────────────── */
+
+.buscador { position: absolute; left: 96px; top: 140px; width: 1000px; white-space: nowrap; }
+.buscador .icono { width: 40px; height: 40px; color: #a3a3ad; margin-right: 18px; }
+.buscador input { display: inline-block; width: 860px; vertical-align: middle; }
+.rejilla-marco { position: absolute; left: 96px; top: 260px; width: 1760px; height: 820px; overflow: hidden; }
+.rejilla { width: 1600px; padding-top: 6px; }
+.rejilla .tarjeta { margin: 20px 28px 60px 0; }
+.vacio { position: absolute; left: 96px; top: 300px; font-size: 32px; color: #a3a3ad; }
+
+/* ── Reproductor ──────────────────────────────────────────────────── */
+
+.reproductor { background: transparent; }
+.capa-video, .avplayer, .video-html5 { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+.video-html5 { background: #000; }
+
+.subtitulos {
+  position: absolute; left: 160px; right: 160px; bottom: 90px; text-align: center;
+  -webkit-transition: bottom .25s; transition: bottom .25s;
+}
+.subtitulos.alto { bottom: 330px; }
+.subtitulos span {
+  display: table; margin: 0 auto 6px; padding: 4px 20px; border-radius: 8px;
+  font-size: 52px; line-height: 1.25; color: #fff; background: rgba(0, 0, 0, .55);
+  text-shadow: 0 0 6px #000, 2px 2px 3px #000;
+}
+
+.cargando { display: none; position: absolute; left: 900px; top: 470px; width: 120px; text-align: center; }
+.cargando.visible { display: block; }
+.rueda {
+  width: 110px; height: 110px; margin: 0 auto; border-radius: 50%;
+  border: 9px solid rgba(255, 255, 255, .2); border-top-color: #e5484d;
+  -webkit-animation: girar 1s linear infinite; animation: girar 1s linear infinite;
+}
+@-webkit-keyframes girar { to { -webkit-transform: rotate(360deg); } }
+@keyframes girar { to { transform: rotate(360deg); } }
+.cargando-texto { margin-top: 14px; font-size: 26px; text-shadow: 0 0 6px #000; }
+
+.aviso-centro {
+  position: absolute; left: 860px; top: 440px; width: 200px; height: 200px; border-radius: 100px;
+  background: rgba(0, 0, 0, .55); text-align: center;
+  opacity: 0; -webkit-transition: opacity .2s; transition: opacity .2s;
+}
+.aviso-centro.visible { opacity: 1; }
+.aviso-centro .icono { width: 100px; height: 100px; margin-top: 50px; }
+
+.controles { opacity: 0; -webkit-transition: opacity .25s; transition: opacity .25s; }
+.controles.visible { opacity: 1; }
+.controles-arriba {
+  position: absolute; left: 0; top: 0; width: 1920px; height: 220px;
+  background: -webkit-linear-gradient(top, rgba(0, 0, 0, .75), rgba(0, 0, 0, 0));
+  background: linear-gradient(to bottom, rgba(0, 0, 0, .75), rgba(0, 0, 0, 0));
+}
+.titulo-video { position: absolute; left: 96px; top: 60px; font-size: 44px; font-weight: bold; }
+.modo-video { position: absolute; left: 96px; top: 124px; font-size: 26px; color: #c8c8d0; }
+.controles-abajo {
+  position: absolute; left: 0; bottom: 0; width: 1920px; height: 380px;
+  background: -webkit-linear-gradient(bottom, rgba(0, 0, 0, .88), rgba(0, 0, 0, 0));
+  background: linear-gradient(to top, rgba(0, 0, 0, .88), rgba(0, 0, 0, 0));
+}
+.barra-tiempo { position: absolute; left: 96px; right: 96px; bottom: 200px; height: 40px; }
+.carril {
+  position: absolute; left: 0; right: 0; top: 16px; height: 8px; border-radius: 4px; overflow: hidden;
+  background: rgba(255, 255, 255, .3);
+}
+.barra-tiempo.foco .carril { top: 14px; height: 12px; border-radius: 6px; }
+.relleno { width: 0; height: 100%; background: #e5484d; }
+.marca {
+  position: absolute; top: 7px; width: 26px; height: 26px; margin-left: -13px; border-radius: 13px;
+  background: #e5484d;
+}
+.barra-tiempo.foco .marca {
+  top: 2px; width: 36px; height: 36px; margin-left: -18px; border-radius: 18px;
+  background: #fff; box-shadow: 0 0 0 5px rgba(229, 72, 77, .7);
+}
+.globo {
+  display: none; position: absolute; bottom: 52px; width: 170px; margin-left: -85px; padding: 6px 0;
+  border-radius: 10px; background: #f2f2f5; color: #0b0b0f;
+  text-align: center; font-size: 34px; font-weight: bold;
+}
+.globo.visible { display: block; }
+.tiempos { position: absolute; left: 96px; right: 96px; bottom: 150px; font-size: 28px; color: #d0d0d6; }
+.tiempos .resto { float: right; }
+.botones-video { position: absolute; left: 96px; bottom: 50px; white-space: nowrap; }
+.boton-video {
+  display: inline-block; vertical-align: middle; margin-right: 24px; padding: 14px 30px; border-radius: 50px;
+  background: rgba(255, 255, 255, .12); color: #f2f2f5; font-size: 28px;
+}
+.boton-video .icono { width: 40px; height: 40px; margin: -4px 12px 0 -4px; }
+.boton-video.redondo { padding: 14px; }
+.boton-video.redondo .icono { width: 52px; height: 52px; margin: 0; }
+.boton-video.foco { background: #f2f2f5; color: #0b0b0f; }
+
+.panel-pistas { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; background: rgba(0, 0, 0, .85); }
+.panel-columnas { position: absolute; left: 260px; top: 140px; width: 1500px; white-space: nowrap; }
+.panel-columna { display: inline-block; vertical-align: top; width: 660px; margin-right: 60px; white-space: normal; }
+.panel-columna h2 { font-size: 44px; margin-bottom: 30px; }
+.panel-lista { max-height: 760px; overflow: hidden; }
+.panel-item { padding: 16px 20px; border-radius: 10px; font-size: 34px; color: #a3a3ad; }
+.panel-item.activo { color: #f2f2f5; font-weight: bold; }
+.panel-item.foco { background: #f2f2f5; color: #0b0b0f; }
+.panel-marca { display: inline-block; width: 52px; }
+.panel-marca .icono { width: 34px; height: 34px; margin-top: -6px; }
+.panel-detalle { margin-left: 16px; font-size: 26px; font-weight: normal; opacity: .75; }
+.panel-ayuda { position: absolute; left: 260px; bottom: 80px; font-size: 28px; color: #a3a3ad; }
+
+.error-video {
+  position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; padding: 280px 300px 0;
+  background: rgba(11, 11, 15, .95);
+}
+.error-video h2 { font-size: 54px; margin-bottom: 30px; }
+.error-video p { max-width: 1300px; margin-bottom: 20px; font-size: 32px; line-height: 1.4; color: #d0d0d6; }
+.error-video .pista { font-size: 28px; color: #a3a3ad; }
+.error-video .boton { margin-top: 30px; }
+
+/* ── Diálogos y avisos ────────────────────────────────────────────── */
+
+.dialogo-fondo { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; background: rgba(0, 0, 0, .7); }
+.dialogo {
+  position: absolute; left: 560px; top: 370px; width: 800px; padding: 50px;
+  background: #17171d; border-radius: 20px; text-align: center;
+}
+.dialogo h2 { font-size: 44px; margin-bottom: 16px; }
+.dialogo p { font-size: 30px; color: #a3a3ad; margin-bottom: 16px; }
+.dialogo-botones .boton { min-width: 240px; margin: 20px 14px 0; }
+.aviso {
+  position: absolute; left: 560px; bottom: 80px; width: 800px; padding: 20px 30px; border-radius: 14px;
+  background: #22222a; text-align: center; font-size: 28px;
+  opacity: 0; -webkit-transition: opacity .3s; transition: opacity .3s;
+}
+.aviso.visible { opacity: 1; }

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- El círculo de la barra de progreso se vuelve blanco cuando la barra está elegida con el mando. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:color="#FFFFFF" android:state_focused="true" />
+    <item android:color="@color/acento" />
+</selector>

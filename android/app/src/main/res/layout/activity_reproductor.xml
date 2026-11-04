@@ -1,0 +1,210 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/raiz"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <org.videolan.libvlc.util.VLCVideoLayout
+        android:id="@+id/video"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <ProgressBar
+        android:id="@+id/cargando"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_gravity="center"
+        android:indeterminateTint="#FFFFFF" />
+
+    <FrameLayout
+        android:id="@+id/controles"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent">
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="120dp"
+            android:layout_gravity="top"
+            android:background="@drawable/degradado_superior" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="140dp"
+            android:layout_gravity="bottom"
+            android:background="@drawable/degradado_inferior" />
+
+        <LinearLayout
+            android:id="@+id/barraSuperior"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingTop="8dp"
+            android:paddingEnd="8dp">
+
+            <ImageButton
+                android:id="@+id/atras"
+                style="@style/BotonReproductor"
+                android:contentDescription="Volver"
+                android:nextFocusDown="@id/reproducir"
+                android:src="@drawable/ic_atras" />
+
+            <TextView
+                android:id="@+id/titulo"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#FFFFFF"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <ImageButton
+                android:id="@+id/botonSubtitulos"
+                style="@style/BotonReproductor"
+                android:contentDescription="Subtítulos"
+                android:nextFocusDown="@id/reproducir"
+                android:src="@drawable/ic_subtitulos" />
+
+            <ImageButton
+                android:id="@+id/botonAudio"
+                style="@style/BotonReproductor"
+                android:contentDescription="Idioma del audio"
+                android:nextFocusDown="@id/reproducir"
+                android:src="@drawable/ic_audio" />
+
+            <ImageButton
+                android:id="@+id/botonFormato"
+                style="@style/BotonReproductor"
+                android:contentDescription="Tamaño de la imagen"
+                android:nextFocusDown="@id/reproducir"
+                android:src="@drawable/ic_formato" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <ImageButton
+                android:id="@+id/retroceder"
+                style="@style/BotonReproductor"
+                android:layout_width="64dp"
+                android:layout_height="64dp"
+                android:padding="16dp"
+                android:contentDescription="Retroceder 10 segundos"
+                android:nextFocusUp="@id/botonSubtitulos"
+                android:nextFocusDown="@id/posicion"
+                android:src="@drawable/ic_retroceder" />
+
+            <ImageButton
+                android:id="@+id/reproducir"
+                style="@style/BotonReproductor"
+                android:layout_width="88dp"
+                android:layout_height="88dp"
+                android:layout_marginStart="32dp"
+                android:layout_marginEnd="32dp"
+                android:padding="18dp"
+                android:contentDescription="Reproducir o pausar"
+                android:nextFocusUp="@id/botonSubtitulos"
+                android:nextFocusDown="@id/posicion"
+                android:src="@drawable/ic_pause" />
+
+            <ImageButton
+                android:id="@+id/avanzar"
+                style="@style/BotonReproductor"
+                android:layout_width="64dp"
+                android:layout_height="64dp"
+                android:padding="16dp"
+                android:contentDescription="Avanzar 10 segundos"
+                android:nextFocusUp="@id/botonSubtitulos"
+                android:nextFocusDown="@id/posicion"
+                android:src="@drawable/ic_avanzar" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/barraInferior"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
+            android:paddingBottom="16dp">
+
+            <TextView
+                android:id="@+id/tiempo"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFeatureSettings="tnum"
+                android:text="0:00"
+                android:textColor="#FFFFFF"
+                android:textSize="13sp" />
+
+            <SeekBar
+                android:id="@+id/posicion"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:focusable="true"
+                android:nextFocusUp="@id/reproducir"
+                android:paddingTop="12dp"
+                android:paddingBottom="12dp"
+                android:progressBackgroundTint="#66FFFFFF"
+                android:progressTint="@color/acento"
+                android:thumbTint="@color/pulgar" />
+
+            <TextView
+                android:id="@+id/duracion"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFeatureSettings="tnum"
+                android:text="0:00"
+                android:textColor="#FFFFFF"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <!-- Adónde se va a saltar mientras se avanza o retrocede con el mando. -->
+        <TextView
+            android:id="@+id/busqueda"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="80dp"
+            android:background="@drawable/fondo_aviso"
+            android:fontFeatureSettings="tnum"
+            android:paddingStart="18dp"
+            android:paddingTop="8dp"
+            android:paddingEnd="18dp"
+            android:paddingBottom="8dp"
+            android:textColor="#FFFFFF"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/aviso"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:layout_marginStart="32dp"
+        android:layout_marginEnd="32dp"
+        android:background="@drawable/fondo_aviso"
+        android:gravity="center"
+        android:paddingStart="20dp"
+        android:paddingTop="12dp"
+        android:paddingEnd="20dp"
+        android:paddingBottom="12dp"
+        android:textColor="#FFFFFF"
+        android:textSize="15sp"
+        android:visibility="gone" />
+</FrameLayout>

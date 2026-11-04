@@ -1,0 +1,27 @@
+# ── Lo de cada casa: no se sube nunca ──
+datos/
+config.json
+peliculas/
+.papelera/
+*.subiendo
+*.log
+
+# ── Claves de firma de Android ──
+# Sin ellas no se puede actualizar la app ya instalada: guárdalas aparte, nunca aquí.
+android/keystore.properties
+*.jks
+*.keystore
+*.p12
+
+# ── Se descargan o se compilan (los .apk y MiCine.exe van en «Releases») ──
+ffmpeg/
+apk/
+MiCine.exe
+__pycache__/
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/local.properties
+tizen/compilado/
+tizen/*.wgt
