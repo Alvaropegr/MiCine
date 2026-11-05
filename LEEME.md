@@ -4,6 +4,8 @@ Tu propio cine en casa: las películas están en tu ordenador y las ves desde el
 
 Código y descargas: **https://github.com/Alvaropegr/MiCine** (las apps y `MiCine.exe` están en *Releases*).
 
+**Manual paso a paso, con imágenes para cada aparato:** [`docs\Manual-de-MiCine.pdf`](docs/Manual-de-MiCine.pdf). Este LEEME es la versión resumida y con los detalles técnicos.
+
 ## Qué hay en esta carpeta
 
 | | |
@@ -16,6 +18,7 @@ Código y descargas: **https://github.com/Alvaropegr/MiCine** (las apps y `MiCin
 | `datos\` | Usuarios, sesiones, por dónde va cada uno y las teles con permiso DLNA. **No lo compartas:** contiene las claves. |
 | `config.json` | Ajustes (puerto, carpeta de películas…). |
 | `tizen\` | La app para teles Samsung (de 2015 en adelante) y el script que la instala. |
+| `docs\Manual-de-MiCine.pdf` | El manual de instalación y uso, con capturas para cada aparato. |
 | `web\`, `windows\`, `android\` | Código fuente, por si hay que cambiar algo y recompilar. |
 
 ## Primeros pasos
@@ -42,7 +45,7 @@ Si tienes películas repartidas (otro disco, una carpeta de series…), pulsa **
 
 - **En este ordenador:** `http://localhost:8080`
 - **En el móvil, la tablet o la tele de casa:** la dirección `http://192.168.x.x:8080` que muestra la ventana de MiCine.
-- **App de Android y Fire TV:** instala `apk\MiCine-1.1.0.apk` en el móvil o `apk\MiCine-1.1.0-firetv.apk` en la Fire TV (instrucciones más abajo). Al abrirla, escribe esa misma dirección, tu usuario y tu contraseña.
+- **App de Android y Fire TV:** instala la app en el móvil o en la Fire TV (instrucciones más abajo). Al abrirla, escribe esa misma dirección, tu usuario y tu contraseña.
 - **Tele Samsung:** con la app de MiCine para Tizen (instrucciones en «Tele Samsung»). Encuentra MiCine en la red sola y se maneja con el mando.
 - **Tele sin app (Samsung de 2014 o antes, y casi cualquier tele con DLNA):** MiCine aparece en su lista de fuentes. No hay que instalar nada (ver «Teles sin app: DLNA»).
 

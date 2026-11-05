@@ -17,4 +17,8 @@ En [Releases](https://github.com/Alvaropegr/MiCine/releases/latest):
 | [`MiCine-firetv.apk`](https://github.com/Alvaropegr/MiCine/releases/latest/download/MiCine-firetv.apk) | App para Fire TV y móviles antiguos. En la Fire TV, escríbela en la app **Downloader**. |
 | [`MiCine-universal.apk`](https://github.com/Alvaropegr/MiCine/releases/latest/download/MiCine-universal.apk) | Vale para cualquier Android, pero pesa más. |
 
-Todo lo demás (instalar, usar, ver fuera de casa, problemas frecuentes) está en el **[LEEME](LEEME.md)**.
+## Manual
+
+**[Manual de MiCine (PDF)](docs/Manual-de-MiCine.pdf)**: instalación y uso paso a paso, con capturas para cada aparato. Cubre Windows, el navegador, el móvil Android, la Fire TV, las teles Samsung con Tizen y las teles con DLNA. También está en [Releases](https://github.com/Alvaropegr/MiCine/releases/latest).
+
+Los detalles técnicos (formatos, ajustes de `config.json`, recompilar) están en el **[LEEME](LEEME.md)**.
