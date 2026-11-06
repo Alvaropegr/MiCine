@@ -67,6 +67,49 @@ MC.dialogo = function (titulo, texto, botones) {
   modal.pintar();
 };
 
+/** Diálogo con una lista vertical de opciones (por ejemplo, las versiones de una película).
+    actual: la opción marcada; alElegir(n) se llama con la elegida. VOLVER cierra sin elegir. */
+MC.elegir = function (titulo, opciones, actual, alElegir) {
+  var lista = MC.h('div', { class: 'eleccion-lista' }), els = [];
+  var modal = {
+    i: actual || 0,
+    cerrar: function () {
+      contenedorCapas.removeChild(modal.el);
+      MC.modal = null;
+    },
+    pintar: function () {
+      for (var k = 0; k < els.length; k++) MC.clase(els[k], 'foco', k === modal.i);
+    },
+    tecla: function (t) {
+      if (t === 'arr' && modal.i > 0) modal.i--;
+      else if (t === 'aba' && modal.i < els.length - 1) modal.i++;
+      else if (t === 'atras') return modal.cerrar();
+      else if (t === 'ok') {
+        modal.cerrar();
+        return alElegir(modal.i);
+      }
+      modal.pintar();
+    }
+  };
+  for (var k = 0; k < opciones.length; k++) {
+    els.push(MC.h('div', { class: 'eleccion-item' + (k === actual ? ' activo' : '') },
+      MC.h('span', { class: 'panel-marca' }, k === actual ? MC.icono('marca') : null), opciones[k]));
+    lista.appendChild(els[k]);
+    (function (indice) {
+      els[indice].addEventListener('click', function () {
+        modal.i = indice;
+        modal.tecla('ok');
+      });
+    })(k);
+  }
+  modal.el = MC.h('div', { class: 'dialogo-fondo' },
+    MC.h('div', { class: 'dialogo eleccion' }, MC.h('h2', null, titulo), lista,
+      MC.h('p', { class: 'eleccion-ayuda' }, 'Pulsa VOLVER para cancelar')));
+  contenedorCapas.appendChild(modal.el);
+  MC.modal = modal;
+  modal.pintar();
+};
+
 MC.preguntarSalir = function () {
   MC.dialogo('¿Salir de MiCine?', '', [{ texto: 'Salir', accion: MC.cerrarApp }, { texto: 'Cancelar' }]);
 };

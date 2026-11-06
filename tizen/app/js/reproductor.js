@@ -11,6 +11,8 @@ var PASO = 10;
 var PASO_RAPIDO = 30;
 var ESPERA_SALTO = 800;
 var ESPERA_OCULTAR = 5000;
+var AVISO_SIGUIENTE = 25;    // segundos antes del final en que se ofrece el siguiente episodio
+var CUENTA_SIGUIENTE = 10;   // segundos hasta que empieza solo
 
 // Lo que reproducen sin ayuda las Samsung con Tizen y los navegadores (nombres de FFmpeg).
 var VIDEO_TELE = ['h264', 'hevc', 'mpeg4', 'mpeg2video', 'mpeg1video', 'vc1', 'wmv3', 'vp8', 'vp9', 'av1', 'msmpeg4v3', 'h263'];
@@ -40,6 +42,11 @@ function PantallaReproductor(peli, inicio, volverA) {
   this.info = null;
   this.desfase = 0;
   this.audioN = null;
+  // Con secciones, si es un episodio y hay otro detrás, se ofrece al acabar.
+  this.siguiente = MC.siguienteEpisodio ? MC.siguienteEpisodio(peli) : null;
+  this.avisoSiguiente = null;
+  this.siguienteDescartado = false;
+  MC.ultimoVideo = peli;
 
   this.capa = MC.h('div', { class: 'capa-video' });
   this.subs = MC.h('div', { class: 'subtitulos' });
@@ -128,6 +135,7 @@ PantallaReproductor.prototype.salirPantalla = function () {
   clearTimeout(this.tSalto);
   clearTimeout(this.tSub);
   clearTimeout(this.tCentro);
+  clearInterval(this.tCuenta);
   document.removeEventListener('visibilitychange', this.alCambiarVisibilidad);
   this.motor.cerrar();
   MC.clase(document.documentElement, 'reproduciendo', false);
@@ -242,6 +250,10 @@ PantallaReproductor.prototype.tic = function () {
   if (this.controlesVisibles()) this.pintarTiempo();
   this.pintarSubExterno();
   if (!this.motor.enPausa() && Math.abs(this.tiempo() - this.ultimoGuardado) >= 15) this.guardar(true);
+  if (this.siguiente && !this.avisoSiguiente && !this.siguienteDescartado && !this.salto && !this.panel) {
+    var d = this.duracion();
+    if (d > 2 * AVISO_SIGUIENTE && !this.motor.enPausa() && d - this.tiempo() <= AVISO_SIGUIENTE) this.ofrecerSiguiente(false);
+  }
 };
 
 // ── Controles ──────────────────────────────────────────────────────────
@@ -379,6 +391,7 @@ PantallaReproductor.prototype.tecla = function (t) {
     if (t === 'ok' || t === 'atras' || t === 'stop') this.salir();
     return;
   }
+  if (this.avisoSiguiente) return this.teclaSiguiente(t);
   if (this.panel) return this.teclaPanel(t);
   var visibles = this.controlesVisibles();
 
@@ -700,7 +713,99 @@ PantallaReproductor.prototype.terminar = function () {
   var d = this.duracion();
   if (d) this.enviarProgreso(d, d);
   this.listo = false;
+  if (this.siguiente) return this.ofrecerSiguiente(true);
   this.salir();
+};
+
+// ── Siguiente episodio ─────────────────────────────────────────────────
+
+/** Cerca del final (o al acabar) se ofrece el siguiente episodio, con el foco en él;
+    si no se pulsa nada, empieza solo al terminar la cuenta atrás. */
+PantallaReproductor.prototype.ofrecerSiguiente = function (alFinal) {
+  var yo = this, sig = this.siguiente, aviso = this.avisoSiguiente;
+  if (aviso) {
+    // Ya estaba a la vista: al acabar el vídeo, «Ver créditos» pasa a ser «Volver».
+    if (alFinal && !aviso.alFinal) {
+      aviso.alFinal = true;
+      aviso.otro.lastChild.textContent = 'Volver';
+      MC.clase(aviso.el, 'al-final', true);
+    }
+    return;
+  }
+  if (this.panel) {
+    this.el.removeChild(this.panel.el);
+    this.panel = null;
+  }
+  this.ocultarControles();
+  MC.clase(this.cargando, 'visible', false);
+  var img = MC.h('img', { class: 'siguiente-imagen', alt: '' });
+  var poster = sig.video.poster || sig.ep.obra.poster;
+  if (poster) {
+    img.onload = function () { MC.clase(img, 'lista', true); };
+    img.src = MC.api.url(poster);
+  }
+  aviso = this.avisoSiguiente = { i: 0, cuenta: CUENTA_SIGUIENTE, alFinal: alFinal };
+  aviso.cuentaEl = MC.h('div', { class: 'siguiente-cuenta' });
+  aviso.ir = MC.h('div', { class: 'boton' }, MC.icono('siguiente'), 'Siguiente episodio');
+  aviso.otro = MC.h('div', { class: 'boton secundario' }, MC.h('span', null, alFinal ? 'Volver' : 'Ver créditos'));
+  aviso.ir.addEventListener('click', function () { yo.irSiguiente(); });
+  aviso.otro.addEventListener('click', function () { yo.descartarSiguiente(); });
+  aviso.el = MC.h('div', { class: 'siguiente' + (alFinal ? ' al-final' : '') },
+    MC.h('div', { class: 'siguiente-caja' },
+      img,
+      MC.h('div', { class: 'siguiente-texto' },
+        MC.h('div', { class: 'siguiente-etiqueta' }, 'Siguiente episodio'),
+        MC.h('div', { class: 'siguiente-titulo' }, MC.etiquetaEpisodio(sig.ep) + ' · ' +
+          (sig.ep.nombre || (sig.ep.episodio !== null ? 'Episodio ' + sig.ep.episodio : sig.video.titulo))),
+        aviso.cuentaEl),
+      MC.h('div', { class: 'siguiente-botones' }, aviso.ir, aviso.otro)));
+  this.el.appendChild(aviso.el);
+  this.pintarSiguiente();
+  this.tCuenta = setInterval(function () {
+    if (document.hidden) return;   // con la app en segundo plano la cuenta espera
+    aviso.cuenta--;
+    if (aviso.cuenta <= 0) yo.irSiguiente();
+    else yo.pintarSiguiente();
+  }, 1000);
+};
+
+PantallaReproductor.prototype.pintarSiguiente = function () {
+  var a = this.avisoSiguiente;
+  a.cuentaEl.textContent = 'Empieza en ' + a.cuenta + ' s';
+  MC.clase(a.ir, 'foco', a.i === 0);
+  MC.clase(a.otro, 'foco', a.i === 1);
+};
+
+PantallaReproductor.prototype.teclaSiguiente = function (t) {
+  var a = this.avisoSiguiente;
+  if (t === 'izq' || t === 'der') a.i = t === 'izq' ? 0 : 1;
+  else if (t === 'ok') return a.i === 0 ? this.irSiguiente() : this.descartarSiguiente();
+  else if (t === 'atras') return this.descartarSiguiente();
+  else if (t === 'stop') return this.salir();
+  else if (t === 'playpausa' && !a.alFinal) return this.alternar();
+  else return;
+  this.pintarSiguiente();
+};
+
+/** El episodio actual cuenta como visto y empieza el siguiente (a medias, desde donde se dejó). */
+PantallaReproductor.prototype.irSiguiente = function () {
+  clearInterval(this.tCuenta);
+  var d = this.duracion();
+  if (this.listo && d) this.enviarProgreso(d, d);
+  this.listo = false;
+  var v = this.siguiente.video;
+  MC.mostrar(new PantallaReproductor(v, enCurso(v) ? Math.max(0, v.progreso.t - 3) : 0, this.volverA));
+};
+
+/** «Ver créditos» (o VOLVER): se sigue viendo sin cuenta atrás; si el vídeo ya ha acabado, se sale. */
+PantallaReproductor.prototype.descartarSiguiente = function () {
+  var a = this.avisoSiguiente;
+  clearInterval(this.tCuenta);
+  this.avisoSiguiente = null;
+  this.siguienteDescartado = true;
+  if (a.el.parentNode) a.el.parentNode.removeChild(a.el);
+  if (a.alFinal) return this.salir();
+  this.mostrarControles();
 };
 
 PantallaReproductor.prototype.salir = function () {

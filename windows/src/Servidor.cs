@@ -35,6 +35,10 @@ namespace MiCine
         public readonly Conversor Conversor;
         /// <summary>El servidor DLNA para las teles (null si está desactivado).</summary>
         public volatile Dlna Dlna;
+        /// <summary>Película, serie, anime o sin identificar (con TMDB si hay clave).</summary>
+        public readonly Identificacion Identificacion;
+        /// <summary>Carátulas sacadas de un fotograma, para lo que no tiene imagen.</summary>
+        public readonly Caratulas Caratulas;
 
         public int Puerto { get; private set; }
         public string Direccion { get; private set; }
@@ -51,6 +55,9 @@ namespace MiCine
             Almacen = almacen;
             Biblioteca = biblioteca;
             Conversor = conversor;
+            string datos = Path.Combine(baseDir, "datos");
+            Identificacion = new Identificacion(datos, biblioteca.Listar, config.Tmdb);
+            Caratulas = new Caratulas(datos, conversor, biblioteca.Listar, biblioteca.Resolver);
         }
 
         /// <summary>Empieza a escuchar. Devuelve null si va bien o el motivo si no.</summary>
@@ -81,6 +88,8 @@ namespace MiCine
             HashFalso.Preparar();
             var hilo = new Thread(Aceptar) { IsBackground = true, Name = "MiCine: escucha" };
             hilo.Start();
+            Identificacion.Arrancar();
+            Caratulas.Arrancar();
             return null;
         }
 
@@ -103,6 +112,8 @@ namespace MiCine
             lock (clientes) { abiertos = new TcpClient[clientes.Count]; clientes.CopyTo(abiertos); }
             foreach (var c in abiertos) { try { c.Close(); } catch (Exception) { } }
             if (Conversor != null) Conversor.PararTodos();
+            Identificacion.Parar();
+            Caratulas.Parar();
         }
 
         void Aceptar()

@@ -1,9 +1,13 @@
 /* Pantallas que se manejan con el mando: conectar, inicio (filas como Netflix), ficha y buscar.
    Cada pantalla tiene un elemento «el», y «tecla(t)» recibe las teclas ya traducidas
-   («izq», «ok», «atras»…). «entrar()» se llama cada vez que se muestra. */
+   («izq», «ok», «atras»…). «entrar()» se llama cada vez que se muestra.
+   Con un servidor con secciones (MiCine 1.3) el inicio tiene pestañas (Inicio, Películas, Series…)
+   y las series se abren en su propia ficha (serie.js); con uno antiguo, todo sigue como antes. */
 
 var ANCHO_TARJETA = 228;   // 200 de carátula + 28 de separación
 var ALTO_FILA = 420;
+var ALTO_FILA_REJILLA = 360;   // filas de la rejilla «de la A a la Z», sin título
+var MAX_FILA = 30;             // tarjetas por sección en Inicio; el resto, en su pestaña
 
 function enCurso(p) {
   return !!p.progreso && p.progreso.t > 15 && p.progreso.t < p.progreso.d * 0.95;
@@ -13,26 +17,43 @@ function vista(p) {
   return !!p.progreso && p.progreso.d > 0 && p.progreso.t >= p.progreso.d * 0.95;
 }
 
-/** Carátula con su título debajo por si no hay imagen; la imagen se pide solo cuando hace falta. */
-function Tarjeta(peli) {
+/** Lo que se dibuja en la tarjeta de un vídeo suelto (servidor antiguo). */
+function datosVideo(p) {
+  return { titulo: p.titulo, poster: p.poster, vista: vista(p), pct: enCurso(p) ? Math.round(p.progreso.t / p.progreso.d * 100) : null };
+}
+
+/** Carátula con su título debajo por si no hay imagen; la imagen se pide solo cuando hace falta.
+    d = {titulo, poster, pct (barra de progreso), vista, etiqueta («T1·E3»), clase}. */
+function Tarjeta(peli, d) {
+  d = d || datosVideo(peli);
   this.peli = peli;
+  this.poster = d.poster;
   this.img = MC.h('img', { alt: '' });
-  this.el = MC.h('div', { class: 'tarjeta' },
-    MC.h('div', { class: 'tarjeta-titulo' }, peli.titulo),
+  this.el = MC.h('div', { class: 'tarjeta' + (d.clase ? ' ' + d.clase : '') },
+    MC.h('div', { class: 'tarjeta-titulo' }, d.titulo),
     this.img,
-    vista(peli) ? MC.h('div', { class: 'tarjeta-vista' }, MC.icono('marca')) : null,
-    enCurso(peli) ? MC.h('div', { class: 'tarjeta-barra' },
-      MC.h('div', { style: 'width:' + Math.round(peli.progreso.t / peli.progreso.d * 100) + '%' })) : null);
+    d.vista ? MC.h('div', { class: 'tarjeta-vista' }, MC.icono('marca')) : null,
+    d.etiqueta ? MC.h('div', { class: 'tarjeta-etiqueta' }, d.etiqueta) : null,
+    d.pct !== null && d.pct !== undefined ? MC.h('div', { class: 'tarjeta-barra' },
+      MC.h('div', { style: 'width:' + d.pct + '%' })) : null);
   this.cargada = false;
 }
 
 Tarjeta.prototype.cargar = function () {
-  if (this.cargada || !this.peli.poster) return;
+  if (this.cargada || !this.poster) return;
   this.cargada = true;
   var img = this.img;
   img.onload = function () { MC.clase(img, 'lista', true); };
-  img.src = MC.api.url(this.peli.poster);
+  img.src = MC.api.url(this.poster);
 };
+
+/** Barra de progreso y «Quedan 20 min» (en el inicio, las fichas…). */
+function barraProgreso(v, delante) {
+  return [
+    MC.h('div', { class: 'barra' }, MC.h('div', { style: 'width:' + Math.round(v.progreso.t / v.progreso.d * 100) + '%' })),
+    MC.h('span', null, (delante ? delante + '  ·  ' : '') + 'Quedan ' + MC.duracion(v.progreso.d - v.progreso.t))
+  ];
+}
 
 /** Lista vertical de botones y campos de texto. */
 function Vertical(items) {
@@ -193,8 +214,9 @@ PantallaConectar.prototype.teclaCampo = function (t) {
 // ── Inicio ─────────────────────────────────────────────────────────────
 
 function PantallaInicio() {
-  var yo = this;
   this.pelis = [];
+  this.catalogo = null;   // solo con un servidor con secciones
+  this.seccion = null;    // pestaña elegida (null = Inicio)
   this.filas = [];
   this.fila = 0;
   this.menuI = 0;
@@ -206,25 +228,70 @@ function PantallaInicio() {
   this.heroeInfo = MC.h('div', { class: 'info' });
   this.heroeBarra = MC.h('div', { class: 'progreso' });
   this.pista = MC.h('div', { class: 'filas-pista' });
-
-  var usuario = (MC.leer('sesion', null) || {}).usuario || '';
-  this.menu = [
-    { el: MC.h('div', { class: 'menu-item' }, MC.icono('lupa'), 'Buscar'), accion: function () { yo.buscar(); } },
-    { el: MC.h('div', { class: 'menu-item' }, MC.icono('recargar'), 'Actualizar'), accion: function () { yo.cargar(); } },
-    { el: MC.h('div', { class: 'menu-item' }, MC.icono('salir'), 'Cerrar sesión (' + usuario + ')'),
-      accion: function () { MC.cerrarSesion(); } }
-  ];
-  var menu = MC.h('div', { class: 'menu-items' });
-  for (var i = 0; i < this.menu.length; i++) menu.appendChild(this.menu[i].el);
+  this.menuSecciones = MC.h('div', { class: 'menu-secciones' });
+  this.menuAcciones = MC.h('div', { class: 'menu-items' });
+  this.construirMenu();
 
   this.el = MC.h('div', { class: 'pantalla inicio' },
     this.fondo,
     MC.h('div', { class: 'velo' }),
-    MC.h('div', { class: 'menu' }, logo(), menu),
+    MC.h('div', { class: 'menu' }, logo(), this.menuSecciones, this.menuAcciones),
     this.arte,
     MC.h('div', { class: 'heroe' }, this.heroeTitulo, this.heroeMeta, this.heroeInfo, this.heroeBarra),
     MC.h('div', { class: 'filas' }, this.pista));
 }
+
+/** Menú de arriba. Con secciones: pestañas a la izquierda y Buscar, Actualizar y Cerrar sesión
+    como botones redondos a la derecha (su nombre sale debajo al enfocarlos). Sin secciones, como siempre. */
+PantallaInicio.prototype.construirMenu = function () {
+  var yo = this, usuario = (MC.leer('sesion', null) || {}).usuario || '', nuevo = !!this.catalogo, i;
+  this.menu = [];
+  MC.vaciar(this.menuSecciones);
+  MC.vaciar(this.menuAcciones);
+  if (nuevo) {
+    var pestanas = [{ id: null, titulo: 'Inicio' }].concat(this.catalogo.secciones);
+    for (i = 0; i < pestanas.length; i++) {
+      this.menu.push({
+        el: MC.h('div', { class: 'menu-item menu-seccion' }, pestanas[i].titulo),
+        seccion: pestanas[i].id,
+        pestana: true,
+        accion: (function (id) { return function () { yo.irSeccion(id); }; })(pestanas[i].id)
+      });
+      this.menuSecciones.appendChild(this.menu[i].el);
+    }
+  }
+  var acciones = [
+    ['lupa', 'Buscar', function () { yo.buscar(); }],
+    ['recargar', 'Actualizar', function () { yo.cargar(); }],
+    ['salir', 'Cerrar sesión (' + usuario + ')', function () { MC.cerrarSesion(); }]
+  ];
+  for (i = 0; i < acciones.length; i++) {
+    var a = acciones[i];
+    var el = nuevo
+      ? MC.h('div', { class: 'menu-item redondo' }, MC.icono(a[0]), MC.h('span', { class: 'menu-etiqueta' }, a[1]))
+      : MC.h('div', { class: 'menu-item' }, MC.icono(a[0]), a[1]);
+    if (a[0] === 'recargar') this.iActualizar = this.menu.length;
+    this.menu.push({ el: el, accion: a[2] });
+    this.menuAcciones.appendChild(el);
+  }
+  for (i = 0; i < this.menu.length; i++) {
+    (function (indice) {
+      yo.menu[indice].el.addEventListener('click', function () {
+        yo.fila = -1;
+        yo.menuI = indice;
+        yo.pintar();
+        yo.tecla('ok');
+      });
+    })(i);
+  }
+  if (this.menuI >= this.menu.length) this.menuI = 0;
+};
+
+/** Posición en el menú de la pestaña que se está viendo. */
+PantallaInicio.prototype.indicePestana = function () {
+  for (var i = 0; i < this.menu.length; i++) if (this.menu[i].pestana && this.menu[i].seccion === this.seccion) return i;
+  return 0;
+};
 
 PantallaInicio.prototype.entrarPantalla = function () {
   if (!this.cargado) this.cargar();
@@ -240,14 +307,23 @@ PantallaInicio.prototype.cargar = function () {
     yo.cargado = true;
     yo.pelis = r.peliculas || [];
     MC.conversion = !!r.conversion;
+    yo.catalogo = MC.catalogo = MC.crearCatalogo(r);
+    if (!yo.catalogo || !yo.existeSeccion(yo.seccion)) yo.seccion = null;
+    yo.construirMenu();
     yo.construir();
   }, function (e) {
     if (e.codigo === 401) return MC.cerrarSesion('Tu sesión ha caducado. Vuelve a entrar.');
     yo.mostrarTexto('No se pudo cargar MiCine', e.mensaje + ' Pulsa OK en «Actualizar» para reintentar.');
     yo.fila = -1;
-    yo.menuI = 1;
+    yo.menuI = yo.iActualizar;
     yo.pintar();
   });
+};
+
+PantallaInicio.prototype.existeSeccion = function (id) {
+  if (id === null) return true;
+  for (var i = 0; i < this.catalogo.secciones.length; i++) if (this.catalogo.secciones[i].id === id) return true;
+  return false;
 };
 
 PantallaInicio.prototype.mostrarTexto = function (titulo, texto) {
@@ -259,11 +335,9 @@ PantallaInicio.prototype.mostrarTexto = function (titulo, texto) {
   MC.clase(this.fondo, 'lista', false);
 };
 
-/** Filas: seguir viendo, añadidas recientemente y una por carpeta. */
-PantallaInicio.prototype.construir = function () {
-  var pelis = this.pelis, filas = [], porCarpeta = {}, carpetas = [];
-  var anterior = this.actual();
-
+/** Filas como antes (servidor antiguo): seguir viendo, añadidas recientemente y una por carpeta. */
+PantallaInicio.prototype.filasPlanas = function () {
+  var pelis = this.pelis, filas = [], porCarpeta = {}, carpetas = [], i;
   var seguir = pelis.filter(enCurso).sort(function (a, b) { return b.progreso.fecha - a.progreso.fecha; });
   if (seguir.length) filas.push({ titulo: 'Seguir viendo', pelis: seguir });
   if (pelis.length > 10) {
@@ -272,7 +346,7 @@ PantallaInicio.prototype.construir = function () {
       pelis: pelis.slice().sort(function (a, b) { return b.fecha - a.fecha; }).slice(0, 20)
     });
   }
-  for (var i = 0; i < pelis.length; i++) {
+  for (i = 0; i < pelis.length; i++) {
     var c = pelis[i].carpeta || '';
     if (!porCarpeta[c]) {
       porCarpeta[c] = [];
@@ -284,32 +358,82 @@ PantallaInicio.prototype.construir = function () {
   for (i = 0; i < carpetas.length; i++) {
     filas.push({ titulo: carpetas[i] === '' ? 'Películas' : carpetas[i].replace(/\//g, ' › '), pelis: porCarpeta[carpetas[i]] });
   }
+  return filas;
+};
+
+/** Filas con secciones. Inicio: seguir viendo, una por sección (lo último primero) y añadidas
+    recientemente. Una pestaña: lo suyo a medias, lo último y todo de la A a la Z en rejilla. */
+PantallaInicio.prototype.filasCatalogo = function () {
+  var cat = this.catalogo, sec = this.seccion, filas = [], i;
+  var obras = sec === null ? cat.obras : cat.obras.filter(function (o) { return o.seccion === sec; });
+  var recientes = obras.slice().sort(function (a, b) { return b.fecha - a.fecha; });
+
+  var seguir = MC.seguirViendo(obras);
+  if (seguir.length) filas.push({ titulo: 'Seguir viendo', pelis: seguir });
+
+  if (sec === null) {
+    for (i = 0; i < cat.secciones.length; i++) {
+      var s = cat.secciones[i];
+      var suyas = recientes.filter(function (o) { return o.seccion === s.id; });
+      var fila = { titulo: s.titulo, pelis: suyas.slice(0, MAX_FILA).map(MC.elementoObra) };
+      if (suyas.length > MAX_FILA) {
+        fila.pelis.push({ clave: 'todo:' + s.id, todo: s, n: suyas.length,
+          d: { titulo: 'Ver todo (' + suyas.length + ')', clase: 'todo' } });
+      }
+      filas.push(fila);
+    }
+    if (cat.secciones.length > 1 || obras.length > 10) {
+      filas.push({ titulo: 'Añadidas recientemente', pelis: recientes.slice(0, 20).map(MC.elementoObra) });
+    }
+  } else {
+    if (obras.length > 14) filas.push({ titulo: 'Añadidas recientemente', pelis: recientes.slice(0, 20).map(MC.elementoObra) });
+    var az = obras.slice().sort(porTitulo).map(MC.elementoObra);
+    for (i = 0; i < az.length; i += COLUMNAS) {
+      filas.push({ titulo: i === 0 ? 'De la A a la Z' : null, pelis: az.slice(i, i + COLUMNAS), rejilla: true });
+    }
+  }
+  return filas;
+};
+
+/** Rehace las filas. Tras ver algo se vuelve a la misma tarjeta (o a la de su obra). */
+PantallaInicio.prototype.construir = function (sinRecordar) {
+  var anterior = sinRecordar ? null : this.actual();
+  var filaAnterior = this.filas[this.fila] ? this.filas[this.fila].titulo : null;
+  var filas = this.catalogo ? this.filasCatalogo() : this.filasPlanas();
+  var y = 0, i;
 
   MC.vaciar(this.pista);
   for (i = 0; i < filas.length; i++) {
     var f = filas[i];
     f.pos = 0;
+    f.y = y;
     f.tarjetas = [];
     f.carril = MC.h('div', { class: 'fila-tarjetas' });
     for (var k = 0; k < f.pelis.length; k++) {
-      var t = new Tarjeta(f.pelis[k]);
+      var t = new Tarjeta(f.pelis[k], f.pelis[k].d);
       this.clicEnTarjeta(t, i, k);
       f.tarjetas.push(t);
       f.carril.appendChild(t.el);
     }
-    this.pista.appendChild(MC.h('div', { class: 'fila' }, MC.h('div', { class: 'fila-titulo' }, f.titulo), f.carril));
+    this.pista.appendChild(MC.h('div', { class: 'fila' + (f.titulo === null ? ' sin-titulo' : '') },
+      f.titulo !== null ? MC.h('div', { class: 'fila-titulo' }, f.titulo) : null, f.carril));
+    y += f.titulo === null ? ALTO_FILA_REJILLA : ALTO_FILA;
   }
   this.filas = filas;
 
   if (!filas.length) {
-    this.mostrarTexto('Aún no hay películas',
-      'Añádelas desde el ordenador: cópialas en la carpeta «peliculas» de MiCine o súbelas desde la web.');
+    this.mostrarTexto('Aún no hay películas', this.catalogo
+      ? 'Añádelas desde el ordenador: cópialas en las carpetas de MiCine y pulsa «Actualizar».'
+      : 'Añádelas desde el ordenador: cópialas en la carpeta «peliculas» de MiCine o súbelas desde la web.');
     this.fila = -1;
-    this.menuI = 1;
+    this.menuI = this.iActualizar;
   } else {
     this.fila = 0;
     // Tras ver una película se vuelve a ella (si sigue a medias, estará la primera de «Seguir viendo»).
-    if (anterior) this.enfocarPeli(anterior.ruta);
+    if (anterior) {
+      if (this.catalogo) this.enfocarElemento(anterior, filaAnterior);
+      else this.enfocarPeli(anterior.ruta);
+    }
   }
   this.pintar();
 };
@@ -336,19 +460,44 @@ PantallaInicio.prototype.enfocarPeli = function (ruta) {
   }
 };
 
+/** Busca la misma tarjeta: primero en la fila donde estaba, luego en cualquiera, y si no, la de su obra. */
+PantallaInicio.prototype.enfocarElemento = function (anterior, tituloFila) {
+  var claves = [anterior.clave];
+  if (anterior.obra) claves.push('obra:' + anterior.obra.id, 'seguir:' + anterior.obra.id);
+  for (var c = 0; c < claves.length; c++) {
+    for (var pasada = 0; pasada < 2; pasada++) {
+      for (var i = 0; i < this.filas.length; i++) {
+        if (pasada === 0 && this.filas[i].titulo !== tituloFila) continue;
+        for (var k = 0; k < this.filas[i].pelis.length; k++) {
+          if (this.filas[i].pelis[k].clave === claves[c]) {
+            this.fila = i;
+            this.filas[i].pos = k;
+            return;
+          }
+        }
+      }
+    }
+  }
+};
+
 PantallaInicio.prototype.actual = function () {
   var f = this.filas[this.fila];
   return f ? f.pelis[f.pos] : null;
 };
 
 PantallaInicio.prototype.pintar = function () {
-  for (var m = 0; m < this.menu.length; m++) MC.clase(this.menu[m].el, 'foco', this.fila === -1 && m === this.menuI);
+  for (var m = 0; m < this.menu.length; m++) {
+    MC.clase(this.menu[m].el, 'foco', this.fila === -1 && m === this.menuI);
+    if (this.menu[m].pestana) MC.clase(this.menu[m].el, 'activa', this.menu[m].seccion === this.seccion);
+  }
   for (var i = 0; i < this.filas.length; i++) {
     var f = this.filas[i];
     for (var k = 0; k < f.tarjetas.length; k++) MC.clase(f.tarjetas[k].el, 'foco', i === this.fila && k === f.pos);
-    MC.mover(f.carril, -f.pos * ANCHO_TARJETA, 0);
+    MC.mover(f.carril, f.rejilla ? 0 : -f.pos * ANCHO_TARJETA, 0);
   }
-  MC.mover(this.pista, 0, -Math.max(0, this.fila) * ALTO_FILA);
+  // Las filas sin título (rejilla) dejan un margen arriba para que la tarjeta enfocada, que crece, se vea entera.
+  var arriba = this.filas[Math.max(0, this.fila)];
+  MC.mover(this.pista, 0, arriba ? -(arriba.y - (arriba.titulo === null ? 44 : 0)) : 0);
   this.cargarCaratulas();
   var yo = this;
   clearTimeout(this.esperaHeroe);
@@ -366,6 +515,7 @@ PantallaInicio.prototype.cargarCaratulas = function () {
 PantallaInicio.prototype.pintarHeroe = function () {
   var p = this.actual();
   if (!p) return;
+  if (this.catalogo) return this.pintarHeroeObra(p);
   this.heroeTitulo.textContent = p.titulo;
   var meta = [];
   if (p.carpeta) meta.push(p.carpeta.replace(/\//g, ' › '));
@@ -377,24 +527,63 @@ PantallaInicio.prototype.pintarHeroe = function () {
   this.heroeInfo.textContent = subs.length ? 'Subtítulos: ' + subs.join(', ') : '';
   MC.vaciar(this.heroeBarra);
   if (enCurso(p)) {
-    this.heroeBarra.appendChild(MC.h('div', { class: 'barra' },
-      MC.h('div', { style: 'width:' + Math.round(p.progreso.t / p.progreso.d * 100) + '%' })));
-    this.heroeBarra.appendChild(MC.h('span', null, 'Quedan ' + MC.duracion(p.progreso.d - p.progreso.t)));
+    MC.anadir(this.heroeBarra, barraProgreso(p));
   } else if (vista(p)) {
     this.heroeBarra.appendChild(MC.h('span', { class: 'vista' }, MC.icono('marca'), 'Vista'));
   }
+  this.ponerArte(p.poster);
+};
+
+PantallaInicio.prototype.ponerArte = function (poster) {
   var arte = this.arte, fondo = this.fondo;
   MC.clase(arte, 'lista', false);
   MC.clase(fondo, 'lista', false);
-  if (p.poster) {
+  if (poster) {
     arte.onload = function () { MC.clase(arte, 'lista', true); };
     fondo.onload = function () { MC.clase(fondo, 'lista', true); };
-    arte.src = fondo.src = MC.api.url(p.poster);
+    arte.src = fondo.src = MC.api.url(poster);
   }
 };
 
+/** Cabecera con secciones: título, año, sinopsis y cómo va (a medias, siguiente episodio…). */
+PantallaInicio.prototype.pintarHeroeObra = function (el) {
+  MC.vaciar(this.heroeBarra);
+  MC.clase(this.heroeInfo, 'sinopsis', true);
+  if (el.todo) {
+    this.heroeTitulo.textContent = el.todo.titulo;
+    this.heroeMeta.textContent = el.n + ' títulos';
+    this.heroeInfo.textContent = 'Pulsa OK para verlos todos.';
+    return this.ponerArte(null);
+  }
+  var o = el.obra, meta = [], info = o.sinopsis || '';
+  if (!o.identificada && o.videos[0].carpeta) meta.push(o.videos[0].carpeta.replace(/\//g, ' › '));
+  if (o.anio) meta.push(o.anio);
+  if (o.serie) {
+    meta.push(MC.textoTemporadas(o));
+    var obj = el.objetivo || MC.objetivoSerie(o), et = MC.etiquetaEpisodio(obj.ep) + (obj.ep.nombre ? ' · ' + obj.ep.nombre : '');
+    if (obj.modo === 'seguir') MC.anadir(this.heroeBarra, barraProgreso(obj.video, et));
+    else if (obj.modo === 'siguiente') this.heroeBarra.appendChild(MC.h('span', null, 'Siguiente: ' + et));
+    else if (obj.modo === 'repetir') this.heroeBarra.appendChild(MC.h('span', { class: 'vista' }, MC.icono('marca'), 'Vista entera'));
+  } else {
+    var v = el.video || versionPorDefecto(o.versiones), e = MC.estado(o.versiones);
+    meta.push(MC.nombreVersion(v));
+    if (o.versiones.length > 1) meta.push(o.versiones.length + ' versiones');
+    if (!info) {
+      var subs = [];
+      for (var i = 0; i < v.subtitulos.length; i++) subs.push(v.subtitulos[i].etiqueta);
+      info = subs.length ? 'Subtítulos: ' + subs.join(', ') : '';
+    }
+    if (e.enCurso) MC.anadir(this.heroeBarra, barraProgreso(e.video));
+    else if (e.vista) this.heroeBarra.appendChild(MC.h('span', { class: 'vista' }, MC.icono('marca'), 'Vista'));
+  }
+  this.heroeTitulo.textContent = o.titulo;
+  this.heroeMeta.textContent = meta.join('  ·  ');
+  this.heroeInfo.textContent = info;
+  this.ponerArte(o.poster);
+};
+
 PantallaInicio.prototype.tecla = function (t) {
-  var f = this.filas[this.fila];
+  var f = this.filas[this.fila], nuevo = !!this.catalogo;
   if (this.fila === -1) {
     if (t === 'izq' && this.menuI > 0) this.menuI--;
     else if (t === 'der' && this.menuI < this.menu.length - 1) this.menuI++;
@@ -404,28 +593,63 @@ PantallaInicio.prototype.tecla = function (t) {
     else return;
   } else if (t === 'izq' && f.pos > 0) f.pos--;
   else if (t === 'der' && f.pos < f.pelis.length - 1) f.pos++;
-  else if (t === 'arr') this.fila--;
-  else if (t === 'aba' && this.fila < this.filas.length - 1) this.fila++;
-  else if (t === 'ok') return MC.mostrar(new PantallaDetalle(this.actual(), this));
-  else if (t === 'play' || t === 'playpausa') return MC.reproducir(this.actual(), enCurso(this.actual()), this);
-  else if (t === 'atras') {
-    if (this.fila === 0 && f.pos === 0) return MC.preguntarSalir();
+  else if (t === 'arr') {
+    // Al subir al menú, el foco va a la pestaña que se está viendo.
+    if (this.fila === 0 && nuevo) this.menuI = this.indicePestana();
+    this.cambiarFila(-1);
+  } else if (t === 'aba' && this.fila < this.filas.length - 1) this.cambiarFila(1);
+  else if (t === 'ok') return nuevo ? this.abrir(this.actual()) : MC.mostrar(new PantallaDetalle(this.actual(), this));
+  else if (t === 'play' || t === 'playpausa') {
+    if (!nuevo) return MC.reproducir(this.actual(), enCurso(this.actual()), this);
+    if (!this.actual().todo) return MC.reproducirElemento(this.actual(), this);
+    return;
+  } else if (t === 'atras') {
+    if (this.fila === 0 && f.pos === 0) {
+      // En una pestaña, VOLVER lleva a Inicio; en Inicio, pregunta si se sale.
+      if (nuevo && this.seccion !== null) return this.irSeccion(null);
+      return MC.preguntarSalir();
+    }
     this.fila = 0;
     this.filas[0].pos = 0;
   } else return;
   this.pintar();
 };
 
+/** Entre filas de la rejilla se mantiene la columna. */
+PantallaInicio.prototype.cambiarFila = function (paso) {
+  var antes = this.filas[this.fila];
+  this.fila += paso;
+  var ahora = this.filas[this.fila];
+  if (antes && ahora && antes.rejilla && ahora.rejilla) ahora.pos = Math.min(antes.pos, ahora.pelis.length - 1);
+};
+
+PantallaInicio.prototype.abrir = function (el) {
+  if (!el) return;
+  if (el.todo) return this.irSeccion(el.todo.id);
+  MC.abrirElemento(el, this);
+};
+
+/** Cambia de pestaña (null = Inicio) y lleva el foco a la primera fila. */
+PantallaInicio.prototype.irSeccion = function (id) {
+  this.seccion = id;
+  this.construir(true);
+  if (this.filas.length) this.fila = 0;
+  this.pintar();
+};
+
 PantallaInicio.prototype.buscar = function () {
-  MC.mostrar(new PantallaBuscar(this.pelis, this));
+  if (!this.catalogo) return MC.mostrar(new PantallaBuscar(this.pelis, this));
+  MC.mostrar(new PantallaBuscar(this.catalogo.obras.slice().sort(porTitulo).map(MC.elementoObra), this, true));
 };
 
 // ── Ficha de una película ──────────────────────────────────────────────
 
-function PantallaDetalle(peli, volver) {
+/** obra (opcional, con secciones): da el título, el año, la sinopsis y las otras versiones. */
+function PantallaDetalle(peli, volver, obra) {
   var yo = this;
   this.peli = peli;
   this.volver = volver;
+  this.obra = obra || null;
   var items = [];
   if (enCurso(peli)) {
     items.push({ el: MC.h('div', { class: 'boton' }, MC.icono('play'), 'Reanudar desde ' + MC.tiempo(peli.progreso.t)),
@@ -436,6 +660,10 @@ function PantallaDetalle(peli, volver) {
     items.push({ el: MC.h('div', { class: 'boton' }, MC.icono('play'), vista(peli) ? 'Volver a verla' : 'Reproducir'),
       accion: function () { MC.reproducir(peli, false, yo); } });
   }
+  if (obra && obra.versiones && obra.versiones.length > 1) {
+    items.push({ el: MC.h('div', { class: 'boton secundario' }, MC.icono('capas'), 'Otras versiones (' + obra.versiones.length + ')'),
+      accion: function () { yo.elegirVersion(); } });
+  }
   items.push({ el: MC.h('div', { class: 'boton secundario' }, 'Volver'), accion: function () { MC.mostrar(volver); } });
   this.lista = new Vertical(items);
 
@@ -443,26 +671,28 @@ function PantallaDetalle(peli, volver) {
   for (var i = 0; i < peli.subtitulos.length; i++) subs.push(peli.subtitulos[i].etiqueta);
   var botones = MC.h('div', { class: 'botones' });
   for (i = 0; i < items.length; i++) botones.appendChild(items[i].el);
+  var poster = obra ? obra.poster || peli.poster : peli.poster;
   var cartel = MC.h('img', { class: 'detalle-arte', alt: '' });
   var fondo = MC.h('img', { class: 'fondo-difuso', alt: '' });
-  if (peli.poster) {
+  if (poster) {
     cartel.onload = function () { MC.clase(cartel, 'lista', true); };
     fondo.onload = function () { MC.clase(fondo, 'lista', true); };
-    cartel.src = fondo.src = MC.api.url(peli.poster);
+    cartel.src = fondo.src = MC.api.url(poster);
   }
-  this.el = MC.h('div', { class: 'pantalla detalle' },
+  var meta = obra
+    ? [!obra.identificada && peli.carpeta ? peli.carpeta.replace(/\//g, ' › ') : '', obra.anio, MC.nombreVersion(peli)]
+    : [peli.carpeta.replace(/\//g, ' › '), MC.extension(peli.ruta), MC.tamano(peli.tamano)];
+  this.el = MC.h('div', { class: 'pantalla detalle' + (obra ? ' con-obra' : '') },
     fondo,
     MC.h('div', { class: 'velo' }),
     cartel,
     MC.h('div', { class: 'detalle-texto' },
-      MC.h('h1', null, peli.titulo),
-      MC.h('div', { class: 'meta' }, [peli.carpeta.replace(/\//g, ' › '), MC.extension(peli.ruta), MC.tamano(peli.tamano)]
-        .filter(function (x) { return x; }).join('  ·  ')),
+      MC.h('h1', null, obra ? obra.titulo : peli.titulo),
+      MC.h('div', { class: 'meta' }, meta.filter(function (x) { return x; }).join('  ·  ')),
+      obra && obra.sinopsis ? MC.h('div', { class: 'info sinopsis' }, obra.sinopsis) : null,
       MC.h('div', { class: 'info' }, subs.length ? 'Subtítulos: ' + subs.join(', ') :
         'Sin subtítulos aparte (los que lleve el vídeo dentro se eligen al verla).'),
-      enCurso(peli) ? MC.h('div', { class: 'progreso' },
-        MC.h('div', { class: 'barra' }, MC.h('div', { style: 'width:' + Math.round(peli.progreso.t / peli.progreso.d * 100) + '%' })),
-        MC.h('span', null, 'Quedan ' + MC.duracion(peli.progreso.d - peli.progreso.t))) : null,
+      enCurso(peli) ? MC.h('div', { class: 'progreso' }, barraProgreso(peli)) : null,
       botones));
 }
 
@@ -476,20 +706,36 @@ PantallaDetalle.prototype.tecla = function (t) {
 
 /** Al volver del reproductor, la ficha se rehace con el progreso nuevo. */
 PantallaDetalle.prototype.rehacer = function () {
-  return new PantallaDetalle(this.peli, this.volver);
+  return new PantallaDetalle(this.peli, this.volver, this.obra);
+};
+
+/** «Otras versiones»: la ficha pasa a la versión elegida (con su propio progreso). */
+PantallaDetalle.prototype.elegirVersion = function () {
+  var yo = this, versiones = this.obra.versiones, opciones = [], actual = 0;
+  for (var i = 0; i < versiones.length; i++) {
+    var v = versiones[i];
+    if (v === this.peli) actual = i;
+    opciones.push(MC.nombreVersion(v) + (enCurso(v) ? '  ·  a medias' : vista(v) ? '  ·  vista' : ''));
+  }
+  MC.elegir('¿Qué versión quieres ver?', opciones, actual, function (n) {
+    MC.mostrar(new PantallaDetalle(versiones[n], yo.volver, yo.obra));
+  });
 };
 
 // ── Buscar ─────────────────────────────────────────────────────────────
 
 var COLUMNAS = 7;
 
-function PantallaBuscar(pelis, volver) {
+/** catalogo: true si «pelis» son tarjetas de obras (servidor con secciones). */
+function PantallaBuscar(pelis, volver, catalogo) {
   var yo = this;
   this.pelis = pelis;
   this.volver = volver;
+  this.catalogo = !!catalogo;
   this.i = -1;          // -1 = el campo de texto
   this.resultados = [];
-  this.texto = MC.h('input', { type: 'text', placeholder: 'Título de la película', autocomplete: 'off', spellcheck: 'false' });
+  this.texto = MC.h('input', { type: 'text', placeholder: catalogo ? 'Título de la película o serie' : 'Título de la película',
+    autocomplete: 'off', spellcheck: 'false' });
   this.texto.addEventListener('input', function () { yo.filtrar(); });
   this.campo = MC.h('div', { class: 'campo buscador' }, MC.icono('lupa'), this.texto);
   this.campo.addEventListener('click', function () { yo.i = -1; yo.pintar(); yo.texto.focus(); });
@@ -509,15 +755,18 @@ PantallaBuscar.prototype.filtrar = function () {
   this.resultados = [];
   MC.vaciar(this.rejilla);
   for (var i = 0; i < this.pelis.length; i++) {
-    if (q && MC.sinAcentos(this.pelis[i].titulo).indexOf(q) < 0) continue;
-    var t = new Tarjeta(this.pelis[i]);
+    var p = this.pelis[i];
+    var titulo = this.catalogo ? p.obra.titulo + (p.obra.anio ? ' ' + p.obra.anio : '') : p.titulo;
+    if (q && MC.sinAcentos(titulo).indexOf(q) < 0) continue;
+    var t = new Tarjeta(p, p.d);
     (function (indice, tarjeta) {
       tarjeta.el.addEventListener('click', function () { yo.i = indice; yo.pintar(); yo.tecla('ok'); });
     })(this.resultados.length, t);
     this.resultados.push(t);
     this.rejilla.appendChild(t.el);
   }
-  this.vacio.textContent = this.resultados.length ? '' : 'No hay ninguna película con ese título.';
+  this.vacio.textContent = this.resultados.length ? '' :
+    this.catalogo ? 'No hay ninguna película ni serie con ese título.' : 'No hay ninguna película con ese título.';
   if (this.i >= this.resultados.length) this.i = this.resultados.length - 1;
   this.pintar();
 };
@@ -548,8 +797,10 @@ PantallaBuscar.prototype.tecla = function (t) {
   else if (t === 'der' && this.i % COLUMNAS < COLUMNAS - 1 && this.i < n - 1) this.i++;
   else if (t === 'arr') this.i = this.i < COLUMNAS ? -1 : this.i - COLUMNAS;
   else if (t === 'aba' && Math.floor(this.i / COLUMNAS) < Math.floor((n - 1) / COLUMNAS)) this.i = Math.min(n - 1, this.i + COLUMNAS);
-  else if (t === 'ok') return MC.mostrar(new PantallaDetalle(this.resultados[this.i].peli, this));
-  else if (t === 'atras') this.i = -1;
+  else if (t === 'ok') {
+    if (this.catalogo) return MC.abrirElemento(this.resultados[this.i].peli, this);
+    return MC.mostrar(new PantallaDetalle(this.resultados[this.i].peli, this));
+  } else if (t === 'atras') this.i = -1;
   else return;
   this.pintar();
 };

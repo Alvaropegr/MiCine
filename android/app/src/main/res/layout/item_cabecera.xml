@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Título encima de la cuadrícula («Películas de la A a la Z»). -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/cabeceraTexto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:ellipsize="end"
+    android:maxLines="1"
+    android:paddingStart="6dp"
+    android:paddingTop="14dp"
+    android:paddingEnd="6dp"
+    android:paddingBottom="2dp"
+    android:textColor="@color/texto"
+    android:textSize="17sp"
+    android:textStyle="bold" />

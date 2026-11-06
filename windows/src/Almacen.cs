@@ -247,6 +247,17 @@ namespace MiCine
             return "/media/" + Py.Citar(ruta) + "?" + consulta;
         }
 
+        /// <summary>
+        /// Carátula sacada del vídeo: se firma «caratula:clave». v (la hora en que se hizo) no se firma:
+        /// solo cambia la dirección cuando se rehace, para que nadie use la vieja guardada.
+        /// </summary>
+        public string EnlaceCaratula(string usuario, string clave, long version)
+        {
+            long expira = (Py.AhoraEntero() / 86400 + DIAS_ENLACE + 1) * 86400;
+            return "/caratula/" + clave + ".jpg?u=" + Py.CitarMas(usuario) + "&e=" + expira.ToString(Py.Inv)
+                + "&f=" + Py.CitarMas(Firma(usuario, "caratula:" + clave, expira)) + "&v=" + version.ToString(Py.Inv);
+        }
+
         public string UsuarioDeEnlace(string ruta, Dictionary<string, List<string>> consulta)
         {
             List<string> u, e, f;

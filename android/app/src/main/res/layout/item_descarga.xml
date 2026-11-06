@@ -63,6 +63,17 @@
             android:textSize="15sp"
             android:textStyle="bold" />
 
+        <!-- Episodios: «T1·E2 · Nombre» debajo del nombre de la serie. -->
+        <TextView
+            android:id="@+id/subtitulo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="@color/texto"
+            android:textSize="13sp"
+            android:visibility="gone" />
+
         <TextView
             android:id="@+id/estado"
             android:layout_width="match_parent"

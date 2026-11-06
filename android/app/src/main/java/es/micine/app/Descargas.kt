@@ -14,6 +14,10 @@ import java.net.URL
 
 data class SubtituloLocal(val etiqueta: String, val archivo: String)
 
+/**
+ * Una película (o episodio) guardada en el móvil. De los episodios se guarda también la serie, la
+ * temporada y el número: así sin conexión se sigue viendo de qué serie es y cuál va después.
+ */
 data class Descarga(
     val ruta: String,
     val titulo: String,
@@ -22,11 +26,25 @@ data class Descarga(
     val poster: String?,
     val subtitulos: List<SubtituloLocal>,
     val tamano: Long,
+    val obra: String? = null,
+    val serie: String? = null,
+    val temporada: Int? = null,
+    val episodio: Int? = null,
+    val nombreEpisodio: String? = null,
+    val version: String? = null,
 ) {
+    /** «T1·E2 · El gato está en la bolsa» si es un episodio. */
+    val detalleEpisodio: String?
+        get() = if (serie == null || episodio == null) null
+        else listOfNotNull(etiquetaEpisodio(temporada ?: 1, episodio), nombreEpisodio).joinToString(" · ")
+
     fun aJson(): JSONObject = JSONObject()
         .put("ruta", ruta).put("titulo", titulo).put("id", idSistema).put("archivo", archivo)
         .put("poster", poster ?: JSONObject.NULL).put("tamano", tamano)
         .put("subtitulos", JSONArray(subtitulos.map { JSONObject().put("etiqueta", it.etiqueta).put("archivo", it.archivo) }))
+        .put("obra", obra ?: JSONObject.NULL).put("serie", serie ?: JSONObject.NULL)
+        .put("temporada", temporada ?: JSONObject.NULL).put("episodio", episodio ?: JSONObject.NULL)
+        .put("nombre_episodio", nombreEpisodio ?: JSONObject.NULL).put("version", version ?: JSONObject.NULL)
 
     companion object {
         fun desdeJson(o: JSONObject) = Descarga(
@@ -37,6 +55,12 @@ data class Descarga(
             poster = o.textoONulo("poster"),
             subtitulos = o.optJSONArray("subtitulos").objetos().map { SubtituloLocal(it.getString("etiqueta"), it.getString("archivo")) },
             tamano = o.optLong("tamano"),
+            obra = o.textoONulo("obra"),
+            serie = o.textoONulo("serie"),
+            temporada = o.enteroONulo("temporada"),
+            episodio = o.enteroONulo("episodio"),
+            nombreEpisodio = o.textoONulo("nombre_episodio"),
+            version = o.textoONulo("version"),
         )
     }
 }
@@ -75,8 +99,8 @@ class Descargas(context: Context) {
 
     fun espacioLibre(): Long = contexto.getExternalFilesDir(Environment.DIRECTORY_MOVIES)?.usableSpace ?: 0L
 
-    /** Empieza a bajar la película. Si ya había una descarga fallida, la sustituye. */
-    fun iniciar(api: Api, pelicula: Pelicula): Descarga {
+    /** Empieza a bajar la película. Si ya había una descarga fallida, la sustituye. [obra]: la serie, si es un episodio. */
+    fun iniciar(api: Api, pelicula: Pelicula, obra: Obra? = null): Descarga {
         val sistema = gestor ?: throw ErrorApi("Este aparato no permite descargar películas")
         de(pelicula.ruta)?.let { borrar(it) }
         val nombre = "${huella(pelicula.ruta)}.${pelicula.extension.ifEmpty { "mp4" }}"
@@ -103,6 +127,12 @@ class Descargas(context: Context) {
             poster = pelicula.poster?.let { File(extras, "poster").path },
             subtitulos = subtitulos,
             tamano = pelicula.tamano,
+            obra = pelicula.obra,
+            serie = obra?.takeIf { pelicula.esEpisodio }?.titulo,
+            temporada = pelicula.temporada,
+            episodio = pelicula.episodio,
+            nombreEpisodio = pelicula.nombreEpisodio,
+            version = pelicula.version,
         )
         guardar(todas() + descarga)
 
@@ -155,6 +185,9 @@ class Descargas(context: Context) {
     }
 
     fun completa(descarga: Descarga): Boolean = info(descarga).estado == EstadoDescarga.COMPLETA && File(descarga.archivo).exists()
+
+    /** Rutas de lo que ya se puede ver sin conexión. */
+    fun rutasCompletas(): Set<String> = todas().filter { completa(it) }.map { it.ruta }.toSet()
 
     /** Quita la descarga (o la cancela si aún no había terminado) y libera el espacio. */
     fun borrar(descarga: Descarga) {

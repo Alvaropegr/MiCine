@@ -1,8 +1,8 @@
 # MiCine
 
-Tu propio cine en casa: las películas están en tu ordenador y las ves desde el navegador, la tele o el móvil, con usuarios y contraseñas.
+Tu propio cine en casa: las películas y series están en tu ordenador y las ves desde el navegador, la tele o el móvil, ordenadas como en Netflix (Películas, Series con temporadas y episodios, Anime), con usuarios y contraseñas.
 
-- **Servidor para Windows** (`MiCine.exe`) o en Python (`servidor.py`): web para ver y subir películas, usuarios, progreso compartido entre aparatos, varias carpetas de películas y conversión al momento con FFmpeg de lo que el aparato no sepa reproducir.
+- **Servidor para Windows** (`MiCine.exe`) o en Python (`servidor.py`): web para ver películas y series, identificación con TMDB (lo que no reconoce va a la sección «MiCine»), carátulas sacadas del vídeo, usuarios, progreso compartido entre aparatos, varias carpetas y conversión al momento con FFmpeg de lo que el aparato no sepa reproducir.
 - **App para Android y Fire TV**: reproduce cualquier formato (motor de VLC), se maneja con el mando y descarga películas para verlas sin conexión.
 - **App para teles Samsung con Tizen** (2015 en adelante) y **DLNA** para las anteriores, sin instalar nada.
 

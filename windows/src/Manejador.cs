@@ -15,8 +15,7 @@ namespace MiCine
     {
         const string COOKIE = "micine_sesion";
         const int TROZO = 1024 * 1024;
-        const long MARGEN_DISCO = 500L * 1024 * 1024;
-        const string CSP = "default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self'; " +
+        const string CSP = "default-src 'self'; img-src 'self' data: https://image.tmdb.org; media-src 'self'; style-src 'self'; " +
             "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 
         static readonly Dictionary<string, string> Estaticos = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -59,8 +58,11 @@ namespace MiCine
                 case "POST /api/logout": return new Ruta { Metodo = ApiLogout, SoloAdmin = false };
                 case "POST /api/progreso": return new Ruta { Metodo = ApiProgreso, SoloAdmin = false };
                 case "POST /api/cuenta/contrasena": return new Ruta { Metodo = ApiMiContrasena, SoloAdmin = false };
-                case "POST /api/subir": return new Ruta { Metodo = ApiSubir, SoloAdmin = true };
                 case "POST /api/peliculas/borrar": return new Ruta { Metodo = ApiBorrarPelicula, SoloAdmin = true };
+                case "GET /api/identificar/buscar": return new Ruta { Metodo = ApiIdentificarBuscar, SoloAdmin = true };
+                case "POST /api/identificar": return new Ruta { Metodo = ApiIdentificar, SoloAdmin = true };
+                case "POST /api/identificar/actualizar": return new Ruta { Metodo = ApiIdentificarActualizar, SoloAdmin = true };
+                case "POST /api/caratulas/actualizar": return new Ruta { Metodo = ApiCaratulasActualizar, SoloAdmin = true };
                 case "GET /api/usuarios": return new Ruta { Metodo = ApiUsuarios, SoloAdmin = true };
                 case "POST /api/usuarios/crear": return new Ruta { Metodo = ApiCrearUsuario, SoloAdmin = true };
                 case "POST /api/usuarios/borrar": return new Ruta { Metodo = ApiBorrarUsuario, SoloAdmin = true };
@@ -78,7 +80,7 @@ namespace MiCine
                 case "/api/estado": case "/api/login": case "/api/logout": case "/api/peliculas": case "/api/info": case "/api/progreso":
                     return true;
             }
-            return ruta.StartsWith("/media/", StringComparison.Ordinal);
+            return ruta.StartsWith("/media/", StringComparison.Ordinal) || ruta.StartsWith("/caratula/", StringComparison.Ordinal);
         }
 
         bool cors;
@@ -122,6 +124,11 @@ namespace MiCine
                         if (UsuarioActual() == null && Almacen.UsuarioDeEnlace(relativa, consulta) == null)
                             throw new ErrorPeticion("Inicia sesión para continuar", 401);
                         ServirMedia(relativa);
+                        return;
+                    }
+                    if (ruta.StartsWith("/caratula/", StringComparison.Ordinal))
+                    {
+                        ServirCaratula(ruta.Substring("/caratula/".Length));
                         return;
                     }
                 }
@@ -563,28 +570,94 @@ namespace MiCine
         {
             var progreso = Almacen.ProgresoDe(usuario);
             var peliculas = Biblioteca.Listar();
+            List<object> secciones;
+            Objeto obras = servidor.Identificacion.Clasificar(peliculas, out secciones);
+            Identificacion.Ordenar(peliculas, obras);
+            servidor.Caratulas.Revisar(peliculas); // antes de enlazar: aquí poster es aún la imagen propia (o null)
             foreach (var p in peliculas)
             {
                 string ruta = (string)p["ruta"];
                 p["progreso"] = progreso.Obtener(ruta, null);
                 p["url"] = Almacen.Enlace(usuario, ruta);
-                p["poster"] = p["poster"] != null ? Almacen.Enlace(usuario, (string)p["poster"]) : null;
+                if (p["poster"] != null) p["poster"] = Almacen.Enlace(usuario, (string)p["poster"]);
+                else
+                {
+                    // Sin imagen propia: el fotograma del vídeo, si ya está hecho
+                    string clave = Caratulas.Clave(p);
+                    long version = servidor.Caratulas.Version(clave);
+                    p["poster"] = version > 0 ? Almacen.EnlaceCaratula(usuario, clave, version) : null;
+                }
                 foreach (Objeto s in (List<object>)p["subtitulos"]) s["url"] = Almacen.Enlace(usuario, (string)s["ruta"]);
             }
+            // Carátula de cada obra: la de su primera película o la del episodio más bajo que tenga
+            var elegido = new Dictionary<string, Objeto>(StringComparer.Ordinal);
+            foreach (var p in peliculas)
+            {
+                string obra = p["obra"] as string;
+                if (obra == null || p["poster"] == null) continue;
+                if (!elegido.ContainsKey(obra)) elegido[obra] = p;
+            }
+            foreach (var kv in elegido) { var o = obras.ObjetoDe(kv.Key); if (o != null) o["poster"] = kv.Value["poster"]; }
+
+            var ident = servidor.Identificacion;
             // La dirección de este ordenador en la red de casa: la que hay que escribir en la tele.
             string ip = servidor.Direccion == "0.0.0.0" || servidor.Direccion == "" ? Servidor.IpEnRed() : null;
             var datos = new Objeto
             {
-                { "peliculas", peliculas }, { "conversion", servidor.Conversor != null },
+                { "peliculas", peliculas }, { "obras", obras }, { "secciones", secciones },
+                { "identificacion", new Objeto { { "tmdb", ident.ConClave }, { "pendientes", (long)ident.Pendientes }, { "estado", ident.EstadoParaWeb } } },
+                { "caratulas", new Objeto { { "pendientes", (long)servidor.Caratulas.Pendientes } } },
+                { "conversion", servidor.Conversor != null },
                 { "red", ip != null ? "http://" + ip + ":" + servidor.Puerto : null },
             };
-            if (Almacen.Rol(usuario) == "admin")
-            {
-                datos["carpeta"] = Biblioteca.Carpeta;
-                datos["libre"] = Nativo.Libre(Biblioteca.Carpeta);
-                datos["limite"] = servidor.Config.LimiteBytes;
-            }
+            if (Almacen.Rol(usuario) == "admin") datos["carpeta"] = Biblioteca.Carpeta;
             EnviarJson(datos);
+        }
+
+        /// <summary>El fotograma de un vídeo sin carátula propia (enlace firmado, como los de /media/).</summary>
+        void ServirCaratula(string nombre)
+        {
+            if (!Regex.IsMatch(nombre, @"\A[0-9a-f]{20}\.jpg\z")) throw new ErrorPeticion("No encontrado", 404);
+            string clave = nombre.Substring(0, 20);
+            if (UsuarioActual() == null && Almacen.UsuarioDeEnlace("caratula:" + clave, consulta) == null)
+                throw new ErrorPeticion("Inicia sesión para continuar", 401);
+            string archivo = servidor.Caratulas.Archivo(clave);
+            if (!File.Exists(archivo)) throw new ErrorPeticion("No encontrado", 404);
+            EnviarBytes(File.ReadAllBytes(archivo), "image/jpeg", 200, Lista("Cache-Control", "private, max-age=86400"));
+        }
+
+        void ApiIdentificarBuscar(string usuario)
+        {
+            string texto = Py.Strip(Primero("q") ?? "");
+            if (texto == "") throw new ErrorPeticion("Escribe qué quieres buscar");
+            bool serie = Primero("tipo") == "serie";
+            EnviarJson(new Objeto { { "resultados", servidor.Identificacion.Buscar(texto, serie) } });
+        }
+
+        void ApiIdentificar(string usuario)
+        {
+            var datos = LeerCuerpo();
+            string grupo = datos["grupo"] as string, obra = datos["obra"] as string;
+            servidor.Identificacion.Asignar(grupo, obra);
+            Registro.Anotar("«" + usuario + "» ha identificado a mano «" + grupo + "»" + (obra != null ? " (" + obra + ")" : " (sin identificar)"));
+            EnviarJson(new Objeto { { "ok", true } });
+        }
+
+        void ApiIdentificarActualizar(string usuario)
+        {
+            LeerCuerpo();
+            servidor.Identificacion.Reintentar();
+            Registro.Anotar("«" + usuario + "» ha pedido volver a identificar lo que falta");
+            EnviarJson(new Objeto { { "ok", true } });
+        }
+
+        void ApiCaratulasActualizar(string usuario)
+        {
+            LeerCuerpo();
+            if (!servidor.Caratulas.Disponible) throw new ErrorPeticion("Para sacar carátulas del vídeo hace falta FFmpeg (ver LEEME.md)", 501);
+            int pendientes = servidor.Caratulas.Rehacer();
+            Registro.Anotar("«" + usuario + "» ha pedido rehacer las carátulas del vídeo (" + pendientes + ")");
+            EnviarJson(new Objeto { { "ok", true }, { "pendientes", (long)pendientes } });
         }
 
         void ApiInfo(string usuario)
@@ -630,69 +703,6 @@ namespace MiCine
             Almacen.FijarContrasena(usuario, ValidarContrasena(datos["nueva"]), null);
             Almacen.CerrarSesionesDe(usuario, Token());
             EnviarJson(new Objeto { { "ok", true } });
-        }
-
-        /// <summary>El navegador envía el archivo tal cual en el cuerpo; se escribe a disco por trozos.</summary>
-        void ApiSubir(string usuario)
-        {
-            var biblioteca = Biblioteca;
-            long longitud;
-            if (!Py.Entero(Cabecera("Content-Length") ?? "", out longitud)) throw new ErrorPeticion("Falta el tamaño del archivo", 411);
-            object limite = servidor.Config.LimiteSubidaGb;
-            if (longitud <= 0) throw new ErrorPeticion("El archivo está vacío");
-            if (longitud > servidor.Config.LimiteBytes)
-                throw new ErrorPeticion("El archivo supera el límite de " + Py.ReprValor(limite) + " GB (se cambia en config.json)", 413);
-            string nombre = Biblioteca.NombreSeguro(Py.Desescapar(Cabecera("X-Nombre-Archivo") ?? ""));
-            if (longitud > Nativo.Libre(biblioteca.Carpeta) - MARGEN_DISCO)
-                throw new ErrorPeticion("No queda espacio suficiente en el disco", 507);
-
-            string destino, temporal;
-            FileStream archivo;
-            lock (biblioteca.Cerrojo)
-            {
-                destino = biblioteca.DestinoLibre(nombre);
-                temporal = destino + ".subiendo";
-                archivo = new FileStream(temporal, FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite, 1 << 16);
-            }
-            long restante = longitud;
-            try
-            {
-                using (archivo)
-                {
-                    var trozo = new byte[TROZO];
-                    while (restante > 0)
-                    {
-                        int n = con.Leer(trozo, 0, (int)Math.Min(TROZO, restante));
-                        if (n <= 0) break;
-                        archivo.Write(trozo, 0, n);
-                        restante -= n;
-                    }
-                }
-            }
-            catch (Desconectado)
-            {
-                Registro.Anotar("Subida de «" + nombre + "» cancelada");
-                throw;
-            }
-            finally
-            {
-                if (restante > 0) { try { File.Delete(temporal); } catch (Exception) { } }
-            }
-            if (restante > 0) // el navegador cortó la subida: ya no hay a quién responder
-            {
-                con.Cerrar = true;
-                Registro.Anotar("Subida de «" + nombre + "» cancelada");
-                return;
-            }
-            CuerpoLeido = true;
-            lock (biblioteca.Cerrojo)
-            {
-                if (File.Exists(destino) || Directory.Exists(destino)) destino = biblioteca.DestinoLibre(nombre);
-                Nativo.Reemplazar(temporal, destino);
-            }
-            long mb = (long)Math.Round(longitud / 1048576.0, MidpointRounding.ToEven);
-            Registro.Anotar("«" + usuario + "» ha subido «" + Path.GetFileName(destino) + "» (" + mb + " MB)");
-            EnviarJson(new Objeto { { "ok", true }, { "nombre", Path.GetFileName(destino) } }, 201, null);
         }
 
         void ApiBorrarPelicula(string usuario)

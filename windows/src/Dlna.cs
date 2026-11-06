@@ -284,13 +284,22 @@ namespace MiCine
 
         // ── catálogo ─────────────────────────────────────────────────────
 
+        /// <summary>Una carpeta de las que ve la tele: otras carpetas dentro y/o vídeos.</summary>
+        internal sealed class Nodo
+        {
+            public string Id, Padre, Titulo;
+            public List<Nodo> Hijos = new List<Nodo>();
+            public List<Objeto> Videos = new List<Objeto>();
+            public int Cuenta { get { return Hijos.Count + Videos.Count; } }
+        }
+
         internal sealed class Catalogo
         {
             public List<Objeto> Peliculas = new List<Objeto>();
             public List<Objeto> Recientes = new List<Objeto>();
             public Dictionary<string, Objeto> PorId = new Dictionary<string, Objeto>(StringComparer.Ordinal);
-            public List<KeyValuePair<string, string>> Carpetas = new List<KeyValuePair<string, string>>(); // id → nombre
-            public Dictionary<string, List<Objeto>> EnCarpeta = new Dictionary<string, List<Objeto>>(StringComparer.Ordinal);
+            public Dictionary<string, Nodo> Nodos = new Dictionary<string, Nodo>(StringComparer.Ordinal);
+            public Nodo Raiz;
         }
 
         readonly object cerrojoCatalogo = new object();
@@ -311,25 +320,14 @@ namespace MiCine
                 if (catalogo != null && (DateTime.UtcNow - catalogoHora).TotalSeconds < 15) return catalogo;
                 var c = new Catalogo();
                 c.Peliculas = Servidor.Biblioteca.Listar();
-                var carpetas = new Dictionary<string, string>(StringComparer.Ordinal);
-                foreach (var p in c.Peliculas)
-                {
-                    c.PorId[IdDe("i", (string)p["ruta"])] = p;
-                    string carpeta = Py.Str(p.Obtener("carpeta", ""));
-                    if (carpeta == "") continue;
-                    string id;
-                    if (!carpetas.TryGetValue(carpeta, out id))
-                    {
-                        id = IdDe("c", carpeta);
-                        carpetas[carpeta] = id;
-                        c.EnCarpeta[id] = new List<Objeto>();
-                    }
-                    c.EnCarpeta[id].Add(p);
-                }
-                foreach (string nombre in Py.Ordenados(carpetas.Keys)) c.Carpetas.Add(new KeyValuePair<string, string>(carpetas[nombre], nombre));
+                List<object> secciones;
+                Objeto obras = Servidor.Identificacion.Clasificar(c.Peliculas, out secciones);
+                Servidor.Caratulas.Revisar(c.Peliculas);
+                foreach (var p in c.Peliculas) c.PorId[IdDe("i", (string)p["ruta"])] = p;
                 c.Recientes = c.Peliculas.OrderByDescending(p => Py.ANumero(p["fecha"])).Take(20).ToList();
+                Arbol(c, obras, secciones);
                 string nueva = c.Peliculas.Count + "|" + c.Peliculas.Sum(p => Py.ANumero(p["tamano"])) + "|" +
-                    string.Join("|", c.Peliculas.Select(p => (string)p["ruta"]));
+                    string.Join("|", c.Peliculas.Select(p => (string)p["ruta"] + "\n" + Py.Str(p["titulo"]) + "\n" + Py.Str(p["seccion"])));
                 nueva = Cripto.Sha256Hex(nueva);
                 if (firma != null && firma != nueva) Interlocked.Exchange(ref actualizacion, Math.Max(Py.AhoraEntero(), Actualizacion + 1));
                 firma = nueva;
@@ -338,6 +336,70 @@ namespace MiCine
                 Sondear(c.Peliculas);
                 return c;
             }
+        }
+
+        /// <summary>
+        /// Raíz: Películas, Series, Anime y MiCine (las que tengan algo), Añadidas recientemente y Todas.
+        /// Cada serie es una carpeta con sus temporadas; dentro, los episodios en orden.
+        /// </summary>
+        static void Arbol(Catalogo c, Objeto obras, List<object> secciones)
+        {
+            Func<string, string, string, Nodo> nodo = (id, padre, titulo) =>
+            {
+                var n = new Nodo { Id = id, Padre = padre, Titulo = titulo };
+                c.Nodos[id] = n;
+                return n;
+            };
+            c.Raiz = nodo("0", "-1", NOMBRE);
+            foreach (Objeto sec in secciones)
+            {
+                string sid = (string)sec["id"];
+                Nodo seccion = nodo("s-" + sid, "0", (string)sec["titulo"]);
+                c.Raiz.Hijos.Add(seccion);
+                var deLaSeccion = c.Peliculas.Where(p => (string)p["seccion"] == sid).ToList();
+                // Series (también las de anime y las que aún no se han identificado): carpeta → temporadas → episodios
+                var series = new Dictionary<string, List<Objeto>>(StringComparer.Ordinal);
+                foreach (var p in deLaSeccion)
+                {
+                    if (p["episodio"] == null) continue;
+                    string obra = (string)p["obra"];
+                    List<Objeto> l;
+                    if (!series.TryGetValue(obra, out l)) series[obra] = l = new List<Objeto>();
+                    l.Add(p);
+                }
+                foreach (string obra in series.Keys.OrderBy(o => Py.Str(obras.ObjetoDe(o)["titulo"]), Comparer<string>.Create(Py.Comparar)))
+                {
+                    var o = obras.ObjetoDe(obra);
+                    Nodo serie = nodo(IdDe("o", sid + "|" + obra), seccion.Id, Py.Str(o["titulo"]) + (o["anio"] != null ? " (" + Py.Str(o["anio"]) + ")" : ""));
+                    seccion.Hijos.Add(serie);
+                    foreach (var porTemporada in series[obra].GroupBy(p => (long)Py.ANumero(p["temporada"])).OrderBy(g => g.Key))
+                    {
+                        Nodo temporada = nodo(IdDe("t", sid + "|" + obra + "/" + porTemporada.Key), serie.Id, "Temporada " + porTemporada.Key);
+                        serie.Hijos.Add(temporada);
+                        var eps = porTemporada.OrderBy(p => Py.ANumero(p["episodio"])).ThenBy(p => Py.Str(p["ruta"]), Comparer<string>.Create(Py.Comparar)).ToList();
+                        foreach (var p in eps)
+                        {
+                            long e = (long)Py.ANumero(p["episodio"]);
+                            string nombre = p["nombre_episodio"] as string;
+                            bool varias = eps.Count(x => (long)Py.ANumero(x["episodio"]) == e) > 1;
+                            p["titulo_dlna"] = e + ". " + (nombre ?? "Episodio " + e) + (varias && p["version"] != null ? " · " + p["version"] : "");
+                            temporada.Videos.Add(p);
+                        }
+                    }
+                }
+                // Películas: lista ordenada por título
+                var pelis = deLaSeccion.Where(p => p["episodio"] == null).OrderBy(p => Py.Str(p["titulo"]), Comparer<string>.Create(Py.Comparar)).ToList();
+                foreach (var p in pelis)
+                {
+                    bool varias = pelis.Count(x => (string)x["obra"] == (string)p["obra"]) > 1;
+                    if (varias && p["version"] != null) p["titulo_dlna"] = Py.Str(p["titulo"]) + " · " + p["version"];
+                    seccion.Videos.Add(p);
+                }
+            }
+            if (c.Recientes.Count > 0) { Nodo r = nodo("r", "0", "Añadidas recientemente"); r.Videos.AddRange(c.Recientes); c.Raiz.Hijos.Add(r); }
+            Nodo v = nodo("v", "0", "Todas las películas");
+            v.Videos.AddRange(c.Peliculas);
+            c.Raiz.Hijos.Add(v);
         }
 
         // Para decidir qué hay que convertir hace falta saber qué lleva cada archivo: se mira en segundo
@@ -1054,49 +1116,31 @@ namespace MiCine
 
             var cat = dlna.Actual();
             var contexto = new Contexto { Base = Base, Samsung = Samsung, Aparato = dlna.ClaveAparato(con.IpRemota) };
+            Dlna.Nodo nodo;
+            Objeto p;
             if (bandera == "BrowseMetadata")
             {
-                Objeto p;
-                if (id == "0") elementos.Add(Contenedor("0", "-1", Dlna.NOMBRE, Raiz(cat).Count));
-                else if (id == "v") elementos.Add(Contenedor("v", "0", "Todas las películas", cat.Peliculas.Count));
-                else if (id == "r") elementos.Add(Contenedor("r", "0", "Añadidas recientemente", cat.Recientes.Count));
-                else if (cat.EnCarpeta.ContainsKey(id)) elementos.Add(Contenedor(id, "0", cat.Carpetas.First(c => c.Key == id).Value, cat.EnCarpeta[id].Count));
+                if (cat.Nodos.TryGetValue(id, out nodo)) elementos.Add(Contenedor(nodo.Id, nodo.Padre, nodo.Titulo, nodo.Cuenta));
                 else if (cat.PorId.TryGetValue(id, out p)) elementos.Add(Item(p, "v", contexto));
                 else { Fallo(701, "No such object"); return; }
                 Resultado(elementos, 1);
                 return;
             }
-
-            List<string> hijos;
-            if (id == "0") hijos = Raiz(cat);
-            else
+            if (!cat.Nodos.TryGetValue(id, out nodo))
             {
-                List<Objeto> peliculas;
-                if (id == "v") peliculas = cat.Peliculas;
-                else if (id == "r") peliculas = cat.Recientes;
-                else if (!cat.EnCarpeta.TryGetValue(id, out peliculas))
-                {
-                    if (cat.PorId.ContainsKey(id)) { Resultado(elementos, 0); return; } // una película no tiene hijos
-                    Fallo(701, "No such object");
-                    return;
-                }
-                total = peliculas.Count;
-                var trozo = peliculas.Skip((int)Math.Min(desde, int.MaxValue)).Take(cuantos == 0 ? int.MaxValue : (int)Math.Min(cuantos, int.MaxValue));
-                foreach (var p in trozo) elementos.Add(Item(p, id, contexto));
-                Resultado(elementos, total);
+                if (cat.PorId.ContainsKey(id)) { Resultado(elementos, 0); return; } // una película no tiene hijos
+                Fallo(701, "No such object");
                 return;
             }
-            total = hijos.Count;
-            elementos.AddRange(hijos.Skip((int)Math.Min(desde, int.MaxValue)).Take(cuantos == 0 ? int.MaxValue : (int)Math.Min(cuantos, int.MaxValue)));
+            // Primero las carpetas y luego los vídeos, de trozo en trozo (como los pide la tele)
+            total = nodo.Cuenta;
+            int saltar = (int)Math.Min(desde, int.MaxValue), tomar = cuantos == 0 ? int.MaxValue : (int)Math.Min(cuantos, int.MaxValue);
+            for (int i = saltar; i < total && elementos.Count < tomar; i++)
+            {
+                if (i < nodo.Hijos.Count) { var h = nodo.Hijos[i]; elementos.Add(Contenedor(h.Id, h.Padre, h.Titulo, h.Cuenta)); }
+                else elementos.Add(Item(nodo.Videos[i - nodo.Hijos.Count], nodo.Id, contexto));
+            }
             Resultado(elementos, total);
-        }
-
-        static List<string> Raiz(Dlna.Catalogo cat)
-        {
-            var l = new List<string> { Contenedor("v", "0", "Todas las películas", cat.Peliculas.Count) };
-            if (cat.Recientes.Count > 0) l.Add(Contenedor("r", "0", "Añadidas recientemente", cat.Recientes.Count));
-            foreach (var c in cat.Carpetas) l.Add(Contenedor(c.Key, "0", c.Value, cat.EnCarpeta[c.Key].Count));
-            return l;
         }
 
         void Resultado(List<string> elementos, int total)
@@ -1157,13 +1201,14 @@ namespace MiCine
             string ext = Py.Lower(Py.Sufijo(Path.GetFileName(relativa)));
             var sb = new StringBuilder();
             sb.Append("<item id=\"").Append(id).Append("\" parentID=\"").Append(X(padre)).Append("\" restricted=\"1\">");
-            sb.Append("<dc:title>").Append(X(Py.Str(p["titulo"]))).Append("</dc:title>");
+            sb.Append("<dc:title>").Append(X(Py.Str(p.Obtener("titulo_dlna", p["titulo"])))).Append("</dc:title>");
             sb.Append("<upnp:class>object.item.videoItem</upnp:class>");
             if (Py.EsNumero(p["fecha"]))
                 sb.Append("<dc:date>").Append(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(Py.ANumero(p["fecha"])).ToString("yyyy-MM-dd'T'HH:mm:ss", Py.Inv)).Append("</dc:date>");
             long marca = dlna.Marca(ctx.Aparato, relativa);
             if (marca > 0) sb.Append("<sec:dcmInfo>CREATIONDATE=0,FOLDER=MiCine,BM=").Append(marca).Append("</sec:dcmInfo>");
             string poster = p["poster"] as string;
+            if (poster == null && dlna.Servidor.Caratulas.Version(Caratulas.Clave(p)) > 0) poster = "fotograma.jpg";
             if (poster != null)
             {
                 string px = Py.Lower(Py.Sufijo(poster));
@@ -1399,6 +1444,11 @@ namespace MiCine
             Objeto p = Pelicula(id, out ruta);
             string poster = p["poster"] as string;
             string real = poster == null ? null : dlna.Servidor.Biblioteca.Resolver(poster);
+            if (poster == null)
+            {
+                string fotograma = dlna.Servidor.Caratulas.Archivo(Caratulas.Clave(p));
+                if (File.Exists(fotograma)) real = fotograma;
+            }
             string tipo;
             if (real == null || !Tipos.Imagenes.TryGetValue(Py.Lower(Py.Sufijo(real)), out tipo)) throw new ErrorPeticion("Sin carátula", 404);
             byte[] imagen = File.ReadAllBytes(real);

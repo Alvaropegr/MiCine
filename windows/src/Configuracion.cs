@@ -26,7 +26,6 @@ namespace MiCine
                 { "direccion", "0.0.0.0" },
                 { "carpeta_peliculas", "peliculas" },
                 { "dias_sesion", 30L },
-                { "limite_subida_gb", 100L },
                 { "abrir_navegador", true },
             };
         }
@@ -95,36 +94,13 @@ namespace MiCine
             }
         }
 
-        /// <summary>limite_subida_gb tal cual (long o double).</summary>
-        public object LimiteSubidaGb
-        {
-            get
-            {
-                object v = Valores["limite_subida_gb"];
-                if (v is long || v is double) return v;
-                if (v is bool) return (bool)v ? 1L : 0L;
-                throw new FormatException("limite_subida_gb de config.json no es un número: " + Py.ReprValor(v));
-            }
-        }
-
-        /// <summary>int(limite_subida_gb * 1024 ** 3)</summary>
-        public long LimiteBytes
-        {
-            get
-            {
-                object v = LimiteSubidaGb;
-                if (v is long) return (long)v * 1073741824L;
-                double d = (double)v * 1073741824.0;
-                if (d >= long.MaxValue) return long.MaxValue;
-                if (d <= long.MinValue) return long.MinValue;
-                return (long)d;
-            }
-        }
-
         public bool AbrirNavegador { get { return Py.Verdad(Valores["abrir_navegador"]); } }
 
         /// <summary>Anunciarse a las teles de casa por DLNA (solo MiCine.exe; servidor.py ignora la clave).</summary>
         public bool Dlna { get { return Py.Verdad(Valores.Obtener("dlna", true)); } }
+
+        /// <summary>Clave de themoviedb.org para identificar películas y series ("" si no hay).</summary>
+        public string Tmdb { get { var s = Valores.Obtener("tmdb", "") as string; return s == null ? "" : s.Trim(); } }
 
         public string CarpetaPeliculasTexto
         {

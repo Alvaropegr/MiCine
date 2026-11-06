@@ -28,6 +28,11 @@
             </intent-filter>
         </activity>
 
+        <!-- Ficha de una serie (temporadas y episodios) o de una película (versiones). -->
+        <activity
+            android:name=".FichaActivity"
+            android:exported="false" />
+
         <activity
             android:name=".LoginActivity"
             android:exported="false"

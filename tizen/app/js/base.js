@@ -73,7 +73,12 @@ var ICONOS = {
     ['path', { d: 'M20 8H9v32h11', fill: 'none', stroke: 'currentColor', 'stroke-width': 4 }],
     ['path', { d: 'M19 24h20 M31 15l9 9-9 9', fill: 'none', stroke: 'currentColor', 'stroke-width': 4 }]
   ],
-  marca: [['path', { d: 'M8 25 L19 36 L40 13', fill: 'none', stroke: 'currentColor', 'stroke-width': 5 }]]
+  marca: [['path', { d: 'M8 25 L19 36 L40 13', fill: 'none', stroke: 'currentColor', 'stroke-width': 5 }]],
+  siguiente: [['path', { d: 'M9 8 L31 24 L9 40 Z M34 8h6v32h-6z' }]],
+  capas: [
+    ['path', { d: 'M24 6 L43 16 L24 26 L5 16 Z' }],
+    ['path', { d: 'M8 24 L24 32.5 L40 24 M8 32 L24 40.5 L40 32', fill: 'none', stroke: 'currentColor', 'stroke-width': 4 }]
+  ]
 };
 
 MC.icono = function (nombre) {

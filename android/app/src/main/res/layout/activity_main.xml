@@ -29,6 +29,25 @@
         app:tabSelectedTextColor="@color/texto"
         app:tabTextColor="@color/tenue" />
 
+    <!-- En el móvil, las secciones (Películas, Series, Anime, MiCine) van en chips; sin ninguno elegido se ve Inicio. -->
+    <HorizontalScrollView
+        android:id="@+id/barraSecciones"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:scrollbars="none"
+        android:visibility="gone">
+
+        <com.google.android.material.chip.ChipGroup
+            android:id="@+id/chipsSecciones"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp"
+            app:chipSpacingHorizontal="8dp"
+            app:singleLine="true"
+            app:singleSelection="true" />
+    </HorizontalScrollView>
+
     <FrameLayout
         android:id="@+id/contenido"
         android:layout_width="match_parent"

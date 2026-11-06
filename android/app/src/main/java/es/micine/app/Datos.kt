@@ -8,6 +8,7 @@ import androidx.core.content.edit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -27,8 +28,18 @@ data class Subtitulo(val etiqueta: String, val url: String)
 data class Progreso(val segundos: Double, val duracion: Double, val fecha: Long) {
     val fraccion: Float get() = if (duracion > 0) (segundos / duracion).toFloat().coerceIn(0f, 1f) else 0f
     val vista: Boolean get() = fraccion >= 0.95f
+
+    /** A medias (como en la web): más de 15 segundos y sin terminar. */
+    val enCurso: Boolean get() = segundos > 15 && !vista
+
+    /** Se empezó de verdad o se terminó: cuenta para «Seguir viendo». */
+    val tocado: Boolean get() = vista || segundos > 15
 }
 
+/**
+ * Un vídeo de MiCine. Los servidores nuevos (1.3) dicen además a qué obra pertenece (película o serie),
+ * su sección y, si es un episodio, la temporada y el número; los antiguos no, y entonces todo es una lista plana.
+ */
 data class Pelicula(
     val ruta: String,
     val titulo: String,
@@ -38,19 +49,38 @@ data class Pelicula(
     val poster: String?,
     val subtitulos: List<Subtitulo>,
     val progreso: Progreso?,
+    val fecha: Long = 0,
+    val seccion: String? = null,
+    val obra: String? = null,
+    val temporada: Int? = null,
+    val episodio: Int? = null,
+    val nombreEpisodio: String? = null,
+    /** «4K», «1080p», «720p» o null: distingue las copias de la misma película o episodio. */
+    val version: String? = null,
+    val grupo: String? = null,
 ) {
     val extension: String get() = ruta.substringAfterLast('.', "").lowercase(Locale.ROOT)
+
+    val esEpisodio: Boolean get() = episodio != null
 
     companion object {
         fun desdeJson(o: JSONObject) = Pelicula(
             ruta = o.getString("ruta"),
             titulo = o.getString("titulo"),
-            carpeta = o.optString("carpeta"),
+            carpeta = o.textoONulo("carpeta").orEmpty(),
             tamano = o.optLong("tamano"),
             url = o.getString("url"),
             poster = o.textoONulo("poster"),
             subtitulos = o.optJSONArray("subtitulos").objetos().map { Subtitulo(it.getString("etiqueta"), it.getString("url")) },
             progreso = o.optJSONObject("progreso")?.let { Progreso(it.optDouble("t"), it.optDouble("d"), it.optLong("fecha")) },
+            fecha = o.optLong("fecha"),
+            seccion = o.textoONulo("seccion"),
+            obra = o.textoONulo("obra"),
+            temporada = o.enteroONulo("temporada"),
+            episodio = o.enteroONulo("episodio"),
+            nombreEpisodio = o.textoONulo("nombre_episodio")?.takeIf { it.isNotBlank() },
+            version = o.textoONulo("version")?.takeIf { it.isNotBlank() },
+            grupo = o.textoONulo("grupo"),
         )
     }
 }
@@ -58,6 +88,12 @@ data class Pelicula(
 fun JSONArray?.objetos(): List<JSONObject> = if (this == null) emptyList() else (0 until length()).map { getJSONObject(it) }
 
 fun JSONObject.textoONulo(clave: String): String? = if (isNull(clave)) null else optString(clave)
+
+fun JSONObject.enteroONulo(clave: String): Int? = if (isNull(clave)) null else when (val valor = opt(clave)) {
+    is Number -> valor.toInt()
+    is String -> valor.trim().toIntOrNull()
+    else -> null
+}
 
 fun huella(texto: String): String =
     MessageDigest.getInstance("SHA-1").digest(texto.toByteArray()).joinToString("") { "%02x".format(it) }.take(16)
@@ -129,6 +165,29 @@ class ProgresoLocal(context: Context) {
     fun guardar(ruta: String, segundos: Double, duracion: Double) = prefs.edit {
         putString(ruta, JSONObject().put("t", segundos).put("d", duracion).put("fecha", System.currentTimeMillis() / 1000).toString())
     }
+
+    /** Lo visto sin conexión manda si es más reciente; de paso se lo cuenta al servidor. */
+    fun mezclar(api: Api, pelicula: Pelicula): Pelicula {
+        val local = leer(pelicula.ruta) ?: return pelicula
+        val remoto = pelicula.progreso
+        if (remoto != null && remoto.fecha >= local.fecha) return pelicula
+        ambitoApp.launch { runCatching { api.progreso(pelicula.ruta, local.segundos, local.duracion) } }
+        return pelicula.copy(progreso = local)
+    }
+}
+
+/** El último catálogo recibido: lo comparten el catálogo, la ficha de una serie y el reproductor (para el siguiente episodio). */
+object CatalogoActual {
+    @Volatile
+    var catalogo: Catalogo? = null
+}
+
+/** Pide el catálogo a MiCine, le añade lo visto sin conexión y lo deja a mano de las demás pantallas. */
+suspend fun cargarCatalogo(sesion: Sesion, progresoLocal: ProgresoLocal): Catalogo {
+    val api = sesion.api()
+    val catalogo = api.catalogo().conPeliculas { progresoLocal.mezclar(api, it) }
+    CatalogoActual.catalogo = catalogo
+    return catalogo
 }
 
 class ErrorApi(mensaje: String, val codigo: Int = 0) : Exception(mensaje)
@@ -145,8 +204,8 @@ class Api(servidor: String, private val token: String? = null) {
         return respuesta.getString("token") to respuesta.getJSONObject("usuario").getString("nombre")
     }
 
-    suspend fun peliculas(): List<Pelicula> =
-        peticion("GET", "/api/peliculas").optJSONArray("peliculas").objetos().map(Pelicula::desdeJson)
+    /** Las películas y, en los servidores nuevos, también las obras (series agrupadas) y las secciones. */
+    suspend fun catalogo(): Catalogo = Catalogo.desdeJson(peticion("GET", "/api/peliculas"))
 
     suspend fun progreso(ruta: String, segundos: Double, duracion: Double) {
         peticion("POST", "/api/progreso", JSONObject().put("ruta", ruta).put("t", segundos).put("d", duracion))

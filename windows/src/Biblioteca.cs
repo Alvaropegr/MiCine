@@ -248,38 +248,7 @@ namespace MiCine
                 });
             }
             foreach (string c in Py.Ordenados(carpetas))
-                if (!c.StartsWith(".")) Recorrer(r, Path.Combine(raiz, c), peliculas);
-        }
-
-        // ── subidas ──────────────────────────────────────────────────────
-
-        static readonly Regex ProhibidosEnNombre = new Regex("[<>:\"|?*\\x00-\\x1f]");
-
-        public static string NombreSeguro(string nombre)
-        {
-            string[] trozos = nombre.Replace("\\", "/").Split('/');
-            nombre = trozos[trozos.Length - 1];
-            nombre = Py.Strip(Py.Strip(Py.Strip(ProhibidosEnNombre.Replace(nombre, "")), "."));
-            string nombreBase, ext;
-            Py.SplitExt(nombre, out nombreBase, out ext);
-            string extMin = Py.Lower(ext);
-            if (nombreBase.Length == 0 || !(Tipos.Videos.ContainsKey(extMin) || Tipos.EsAcompanante(extMin)))
-                throw new ErrorPeticion("Solo se pueden subir vídeos, subtítulos (.srt, .vtt) o carátulas (.jpg, .png, .webp)");
-            if (Tipos.ReservadosWindows.Contains(Py.Upper(nombreBase.Split('.')[0]))) nombreBase = "_" + nombreBase;
-            return Py.Recortar(nombreBase, 180) + extMin;
-        }
-
-        static bool ExisteRuta(string ruta) { return File.Exists(ruta) || Directory.Exists(ruta); }
-
-        public string DestinoLibre(string nombre)
-        {
-            string nombreBase, ext;
-            Py.SplitExt(nombre, out nombreBase, out ext);
-            for (int numero = 1; ; numero++)
-            {
-                string candidato = Path.Combine(Carpeta, numero == 1 ? nombre : nombreBase + " (" + numero + ")" + ext);
-                if (!ExisteRuta(candidato) && !ExisteRuta(candidato + ".subiendo")) return candidato;
-            }
+                if (!c.StartsWith(".") && !Nombres.CarpetaIgnorada(c)) Recorrer(r, Path.Combine(raiz, c), peliculas);
         }
 
         // ── papelera ─────────────────────────────────────────────────────

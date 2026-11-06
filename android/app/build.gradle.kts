@@ -20,8 +20,8 @@ android {
         // 22 = Android 5.1: así funciona también en los Fire TV más antiguos (Fire OS 5 y 6).
         minSdk = 22
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 4
+        versionName = "1.3.0"
         androidResources.localeFilters += listOf("es")
     }
 
@@ -85,4 +85,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     // El motor de VLC: reproduce prácticamente cualquier formato (MKV, AVI, WMV, AC3, DTS…).
     implementation("org.videolan.android:libvlc-all:3.7.7")
+
+    // Pruebas de la lógica pura (catálogo, series, versiones) en el ordenador, sin emulador.
+    testImplementation("junit:junit:4.13.2")
+    // En las pruebas, el org.json de Android es solo de mentira: hace falta el de verdad.
+    testImplementation("org.json:json:20240303")
 }

@@ -85,6 +85,7 @@ class LoginActivity : AppCompatActivity() {
                 sesion.servidor = api.base
                 sesion.usuario = nombreReal
                 sesion.token = token
+                CatalogoActual.catalogo = null // puede ser otro usuario: nada de lo visto antes
                 startActivity(Intent(this@LoginActivity, MainActivity::class.java))
                 finish()
             } catch (e: ErrorApi) {

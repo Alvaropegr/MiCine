@@ -35,6 +35,9 @@ namespace MiCine
         readonly Label etiquetaOtras;
         readonly TextBox urlTele, urlMovil;
         readonly Button copiarTele, copiarMovil;
+        readonly Button actualizarCaratulas, guardarTmdb, reidentificar;
+        readonly TextBox claveTmdb;
+        readonly Label tmdbTexto;
         readonly TableLayoutPanel listaCarpetas;
         string firmaCarpetas;
         readonly Button crearAdmin, gestionar, recuperar, aplicarPuerto, marcha;
@@ -121,7 +124,7 @@ namespace MiCine
             // ── películas ──
             var tarjetaPeliculas = Tema.Tarjeta();
             Tema.Fila(tarjetaPeliculas, Tema.Titulo("Películas"), null);
-            Tema.Fila(tarjetaPeliculas, Tema.Etiqueta("Carpeta principal (aquí se guarda lo que subes desde la web)", Tema.Tenue, Tema.Letra(9f)), null);
+            Tema.Fila(tarjetaPeliculas, Tema.Etiqueta("Carpeta principal", Tema.Tenue, Tema.Letra(9f)), null);
             carpeta = Tema.Campo(Tema.Letra(9.75f));
             abrirCarpeta = Tema.Boton("Abrir carpeta", false);
             cambiarCarpeta = Tema.Boton("Cambiar…", false);
@@ -140,7 +143,28 @@ namespace MiCine
             cuantas = Tema.Etiqueta("", Tema.Tenue, Tema.Letra(9f));
             cuantas.Anchor = AnchorStyles.Left;
             anadirCarpeta = Tema.Boton("Añadir carpeta…", false);
-            Tema.Fila(tarjetaPeliculas, cuantas, Tema.Botonera(anadirCarpeta));
+            actualizarCaratulas = Tema.Boton("Actualizar carátulas", false);
+            Tema.Fila(tarjetaPeliculas, cuantas, Tema.Botonera(actualizarCaratulas, anadirCarpeta));
+
+            // ── identificar con TMDB ──
+            var tarjetaTmdb = Tema.Tarjeta();
+            var conseguirClave = Tema.Boton("Conseguir una clave", false);
+            conseguirClave.Margin = new Padding(0, 0, 0, 4);
+            Tema.Fila(tarjetaTmdb, Tema.Titulo("Series, películas y anime (TMDB)"), conseguirClave);
+            Tema.Fila(tarjetaTmdb, Tema.Etiqueta("Con una clave gratuita de themoviedb.org, MiCine reconoce cada película y serie (y el anime) y les pone su nombre en español.\n" +
+                "Solo se envían los nombres de los archivos.", Tema.Tenue, Tema.Letra(9f)), null);
+            claveTmdb = new TextBox
+            {
+                BorderStyle = BorderStyle.FixedSingle, BackColor = Tema.Fondo, ForeColor = Tema.Texto, Font = Tema.Letra(10f),
+                UseSystemPasswordChar = true, Anchor = AnchorStyles.Left | AnchorStyles.Right, Margin = new Padding(0, 4, 8, 4),
+            };
+            guardarTmdb = Tema.Boton("Guardar clave", false);
+            Tema.Fila(tarjetaTmdb, claveTmdb, Tema.Botonera(guardarTmdb));
+            tmdbTexto = Tema.Etiqueta("", Tema.Tenue, Tema.Letra(9f));
+            tmdbTexto.Anchor = AnchorStyles.Left;
+            reidentificar = Tema.Boton("Volver a identificar", false);
+            Tema.Fila(tarjetaTmdb, tmdbTexto, Tema.Botonera(reidentificar));
+            conseguirClave.Click += delegate { AbrirUrl("https://www.themoviedb.org/settings/api"); };
 
             // ── usuarios ──
             var tarjetaUsuarios = Tema.Tarjeta();
@@ -172,7 +196,7 @@ namespace MiCine
             var verGithub = Tema.Boton("Ver en GitHub", false);
             verGithub.Margin = new Padding(0, 0, 0, 4);
             Tema.Fila(tarjetaApps, Tema.Titulo("Instalar las apps"), verGithub);
-            Tema.Fila(tarjetaApps, Tema.Etiqueta("Fire TV: instala «Downloader» (de la tienda de Amazon) y escribe esta dirección", Tema.Tenue, Tema.Letra(9f)), null);
+            Tema.Fila(tarjetaApps, Tema.Etiqueta("Fire TV con Fire OS: instala «Downloader» (tienda de Amazon) y escribe esta dirección. Las nuevas con Vega OS no admiten apps de fuera.", Tema.Tenue, Tema.Letra(9f)), null);
             urlTele = Tema.Campo(Tema.Negrita(12f));
             copiarTele = Tema.Boton("Copiar", false);
             Tema.Fila(tarjetaApps, urlTele, Tema.Botonera(copiarTele));
@@ -231,7 +255,7 @@ namespace MiCine
             var marcoActividad = new Panel { Dock = DockStyle.Fill, BackColor = Tema.Panel, Padding = new Padding(10, 8, 10, 8), Margin = new Padding(0) };
             marcoActividad.Controls.Add(actividad);
 
-            Control[] filas = { cabecera, detalleError, direcciones, tarjetaPeliculas, tarjetaUsuarios, tarjetaTeles, tarjetaApps, opciones, tituloActividad, marcoActividad };
+            Control[] filas = { cabecera, detalleError, direcciones, tarjetaPeliculas, tarjetaTmdb, tarjetaUsuarios, tarjetaTeles, tarjetaApps, opciones, tituloActividad, marcoActividad };
             raiz.RowCount = filas.Length;
             for (int i = 0; i < filas.Length; i++)
             {
@@ -272,6 +296,10 @@ namespace MiCine
             abrirCarpeta.Click += delegate { AbrirCarpeta(); };
             cambiarCarpeta.Click += delegate { CambiarCarpeta(); };
             anadirCarpeta.Click += delegate { AnadirCarpeta(); };
+            actualizarCaratulas.Click += delegate { ActualizarCaratulas(); };
+            guardarTmdb.Click += delegate { GuardarTmdb(); };
+            claveTmdb.KeyDown += delegate (object o, KeyEventArgs e) { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; GuardarTmdb(); } };
+            reidentificar.Click += delegate { var sv = nucleo.Servidor; if (sv != null) { sv.Identificacion.Reintentar(); PintarTmdb(); } };
             crearAdmin.Click += delegate { Administrador(false); };
             recuperar.Click += delegate { Administrador(true); };
             gestionar.Click += delegate { AbrirUrl(nucleo.UrlLocal + "/#/usuarios"); };
@@ -463,8 +491,9 @@ namespace MiCine
             abrirCarpeta.Enabled = nucleo.Biblioteca != null;
             cambiarCarpeta.Enabled = nucleo.Config != null;
             if (peliculas < 0) cuantas.Text = "Contando películas…";
-            else if (peliculas == 0) cuantas.Text = "Todavía no hay películas: cópialas en esta carpeta o súbelas desde la web.";
-            else cuantas.Text = peliculas == 1 ? "1 película" : peliculas.ToString("N0", System.Globalization.CultureInfo.GetCultureInfo("es-ES")) + " películas";
+            else if (peliculas == 0) cuantas.Text = "Todavía no hay películas: cópialas en esta carpeta.";
+            else cuantas.Text = (peliculas == 1 ? "1 vídeo" : peliculas.ToString("N0", System.Globalization.CultureInfo.GetCultureInfo("es-ES")) + " vídeos") + TextoCaratulas();
+            PintarTmdb();
 
             var almacen = nucleo.Almacen;
             if (almacen == null)
@@ -659,6 +688,82 @@ namespace MiCine
             listaCarpetas.Visible = filas.Count > 0;
             anadirCarpeta.Enabled = nucleo.Config != null && error == null;
             listaCarpetas.ResumeLayout();
+        }
+
+        string TextoCaratulas()
+        {
+            var sv = nucleo.Servidor;
+            if (sv == null || !sv.Caratulas.Disponible) return "";
+            int n = sv.Caratulas.Pendientes;
+            return n > 0 ? " · haciendo carátulas del vídeo: quedan " + n.ToString("N0", System.Globalization.CultureInfo.GetCultureInfo("es-ES")) : "";
+        }
+
+        void ActualizarCaratulas()
+        {
+            var sv = nucleo.Servidor;
+            if (sv == null) return;
+            if (!sv.Caratulas.Disponible)
+            {
+                MessageBox.Show(this, "Para sacar las carátulas del vídeo hace falta FFmpeg (carpeta ffmpeg junto a MiCine.exe; ver LEEME.md).",
+                    "MiCine", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            if (MessageBox.Show(this, "Se volverán a sacar las carátulas de todos los vídeos que no tienen imagen propia.\n" +
+                "Tarda un rato (se hace poco a poco, sin ralentizar el ordenador). ¿Seguir?", "MiCine",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            int n = sv.Caratulas.Rehacer();
+            Registro.Anotar("Rehaciendo las carátulas del vídeo (" + n + ")");
+            Actualizar();
+        }
+
+        void GuardarTmdb()
+        {
+            if (nucleo.Config == null) return;
+            string clave = claveTmdb.Text.Trim();
+            try { Configuracion.Guardar(nucleo.RutaConfig, "tmdb", clave); }
+            catch (Exception e)
+            {
+                MessageBox.Show(this, "No se pudo guardar la clave en config.json: " + e.Message, "MiCine", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            nucleo.Config.Valores["tmdb"] = clave;
+            var sv = nucleo.Servidor;
+            if (sv != null) sv.Identificacion.CambiarClave(clave);
+            Registro.Anotar(clave == "" ? "Clave de TMDB quitada: se separa por el nombre del archivo" : "Clave de TMDB guardada: identificando películas y series…");
+            PintarTmdb();
+        }
+
+        void PintarTmdb()
+        {
+            var sv = nucleo.Servidor;
+            if (!claveTmdb.Focused && nucleo.Config != null && claveTmdb.Text == "" && nucleo.Config.Tmdb != "") claveTmdb.Text = nucleo.Config.Tmdb;
+            guardarTmdb.Enabled = nucleo.Config != null;
+            reidentificar.Enabled = sv != null && sv.Identificacion.ConClave;
+            if (sv == null) { tmdbTexto.Text = "MiCine no está en marcha."; tmdbTexto.ForeColor = Tema.Tenue; return; }
+            var id = sv.Identificacion;
+            var es = System.Globalization.CultureInfo.GetCultureInfo("es-ES");
+            string estado = id.Estado;
+            if (!id.ConClave)
+            {
+                tmdbTexto.Text = "Sin clave: se separan series y películas por el nombre del archivo.";
+                tmdbTexto.ForeColor = Tema.Tenue;
+            }
+            else if (estado != null && estado != "Identificando con TMDB…")
+            {
+                tmdbTexto.Text = estado;
+                tmdbTexto.ForeColor = Tema.Aviso;
+            }
+            else if (id.Pendientes > 0)
+            {
+                tmdbTexto.Text = "Identificando con TMDB… quedan " + id.Pendientes.ToString("N0", es) + " consultas";
+                tmdbTexto.ForeColor = Tema.Tenue;
+            }
+            else
+            {
+                tmdbTexto.Text = "Identificados " + id.Identificados.ToString("N0", es) + " de " + id.Total.ToString("N0", es) + " vídeos" +
+                    (id.EnMiCine > 0 ? " · " + id.EnMiCine.ToString("N0", es) + " sin identificar (en «MiCine»)" : "");
+                tmdbTexto.ForeColor = id.EnMiCine > 0 ? Tema.Tenue : Tema.Exito;
+            }
         }
 
         void GuardarOtras(List<string> textos)

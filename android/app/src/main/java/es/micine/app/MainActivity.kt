@@ -4,9 +4,6 @@ import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
-import android.content.res.ColorStateList
-import android.graphics.Color
-import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -18,9 +15,11 @@ import android.view.ViewGroup
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.TextView
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SearchView
 import androidx.core.content.ContextCompat
+import androidx.core.view.children
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
@@ -28,33 +27,44 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.bottomnavigation.BottomNavigationView
-import com.google.android.material.card.MaterialCardView
+import com.google.android.material.chip.Chip
+import com.google.android.material.chip.ChipGroup
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.google.android.material.progressindicator.CircularProgressIndicator
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.snackbar.Snackbar
 import com.google.android.material.tabs.TabLayout
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.io.File
+import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var sesion: Sesion
     private lateinit var descargas: Descargas
     private lateinit var progresoLocal: ProgresoLocal
+    private lateinit var acciones: Acciones
     private lateinit var listaPeliculas: RecyclerView
     private lateinit var listaDescargas: RecyclerView
     private lateinit var vacio: TextView
     private lateinit var cargando: View
     private lateinit var navegacion: BottomNavigationView
     private lateinit var pestanas: TabLayout
+    private lateinit var barraSecciones: View
+    private lateinit var chipsSecciones: ChipGroup
 
-    private val adaptadorPeliculas = AdaptadorPeliculas()
+    private lateinit var adaptadorCatalogo: AdaptadorCatalogo
     private val adaptadorDescargas = AdaptadorDescargas()
-    private var peliculas: List<Pelicula> = emptyList()
+    private var catalogo: Catalogo? = null
+    private var infos: Map<String, InfoDescarga> = emptyMap()
     private var filtro = ""
+    private var buscando = false
     private var pestana = R.id.nav_peliculas
+
+    /** Sección elegida (Películas, Series…); null = Inicio. */
+    private var seccion: String? = null
+    private var seccionesPintadas: List<Seccion>? = null
+    private var cambiandoSecciones = false
     private var ultimoError: String? = null
     private var cargaEnCurso: Job? = null
 
@@ -65,8 +75,7 @@ class MainActivity : AppCompatActivity() {
     private var tele = false
     private var enfoqueInicial = false
 
-    /** Identificador fijo de cada película en las listas: así el mando no pierde su sitio al recargar. */
-    private val ids = HashMap<String, Long>()
+    private val ids = IdsEstables()
 
     private val reloj = Handler(Looper.getMainLooper())
     private val tictac = object : Runnable {
@@ -74,6 +83,37 @@ class MainActivity : AppCompatActivity() {
             refrescarDescargas()
             reloj.postDelayed(this, 1000)
         }
+    }
+
+    /** Atrás: de una sección se vuelve a Inicio y de Descargas al catálogo; desde Inicio se sale. */
+    private val atras = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() {
+            if (pestana == R.id.nav_descargas) {
+                elegirPestana(R.id.nav_peliculas)
+            } else {
+                elegirSeccion(null)
+            }
+        }
+    }
+
+    private val manejo = object : ManejoTarjetas {
+        override fun tocar(tarjeta: Tarjeta) {
+            val video = tarjeta.video
+            if (video != null) acciones.reproducir(video) else tarjeta.obra?.let { abrirFicha(it) }
+        }
+
+        override fun mantener(tarjeta: Tarjeta): Boolean {
+            val obra = tarjeta.obra ?: return false
+            abrirFicha(obra)
+            return true
+        }
+
+        override fun descargar(tarjeta: Tarjeta) = acciones.pulsarDescarga(tarjeta.versiones)
+
+        override fun infoDescarga(tarjeta: Tarjeta): InfoDescarga? =
+            tarjeta.versiones.firstNotNullOfOrNull { infos[it.ruta] }
+
+        override fun urlImagen(ruta: String): String = sesion.api().absoluta(ruta)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -96,33 +136,71 @@ class MainActivity : AppCompatActivity() {
         cargando = findViewById(R.id.cargando)
         navegacion = findViewById(R.id.navegacion)
         pestanas = findViewById(R.id.pestanas)
+        barraSecciones = findViewById(R.id.barraSecciones)
+        chipsSecciones = findViewById(R.id.chipsSecciones)
         tele = esTele(this)
+        acciones = Acciones(
+            this, sesion, descargas,
+            avisar = ::aviso,
+            verDescargas = { elegirPestana(R.id.nav_descargas) },
+            alCambiar = {
+                refrescarDescargas()
+                pintar()
+            },
+        )
 
         val anchoDp = resources.displayMetrics.widthPixels / resources.displayMetrics.density
-        val columnas = if (tele) {
+        val columnas: Int
+        val anchoFilaDp: Float
+        if (tele) {
             adaptarATele()
-            ((anchoDp - 96) / 120).toInt().coerceAtLeast(4)
+            columnas = ((anchoDp - 96) / 120).toInt().coerceAtLeast(4)
+            anchoFilaDp = (anchoDp - 96 - 16) / 6.5f
         } else {
-            (anchoDp / 130).toInt().coerceAtLeast(2)
+            columnas = (anchoDp / 130).toInt().coerceAtLeast(2)
+            anchoFilaDp = ((anchoDp - 16) / 3.3f).coerceAtMost(170f)
         }
-        listaPeliculas.layoutManager = GridLayoutManager(this, columnas)
-        listaPeliculas.adapter = adaptadorPeliculas
+        adaptadorCatalogo = AdaptadorCatalogo(manejo, (anchoFilaDp * resources.displayMetrics.density).roundToInt())
+        listaPeliculas.layoutManager = GridLayoutManager(this, columnas).apply {
+            spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
+                override fun getSpanSize(posicion: Int) = if (adaptadorCatalogo.ocupaTodoElAncho(posicion)) columnas else 1
+            }
+        }
+        listaPeliculas.adapter = adaptadorCatalogo
         listaDescargas.layoutManager = LinearLayoutManager(this)
         listaDescargas.adapter = adaptadorDescargas
 
         navegacion.setOnItemSelectedListener {
-            mostrarPestana(it.itemId)
+            pestana = it.itemId
+            mostrarPestana()
             true
+        }
+        // Tocar «Inicio» estando ya en el catálogo: vuelve a Inicio (sin sección) y arriba del todo.
+        navegacion.setOnItemReselectedListener { if (it.itemId == R.id.nav_peliculas) elegirSeccion(null) }
+        chipsSecciones.setOnCheckedStateChangeListener { grupo, elegidos ->
+            if (cambiandoSecciones) return@setOnCheckedStateChangeListener
+            seccion = elegidos.firstOrNull()?.let { grupo.findViewById<View>(it)?.tag as? String }
+            alCambiarSeccion()
         }
         navegacion.isVisible = !soloDescargas && !tele
         pestanas.isVisible = !soloDescargas && tele
+        onBackPressedDispatcher.addCallback(this, atras)
+
         if (soloDescargas) {
-            mostrarPestana(R.id.nav_descargas)
+            pestana = R.id.nav_descargas
+            mostrarPestana()
         } else {
-            val inicial = savedInstanceState?.getInt("pestana") ?: R.id.nav_peliculas
-            elegirPestana(inicial)
-            mostrarPestana(inicial)
+            seccion = savedInstanceState?.getString("seccion")
+            catalogo = CatalogoActual.catalogo // al girar la pantalla se ve enseguida lo que ya había
+            pintarSecciones()
+            elegirPestana(savedInstanceState?.getInt("pestana") ?: R.id.nav_peliculas)
+            mostrarPestana()
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_VER_DESCARGAS, false)) elegirPestana(R.id.nav_descargas)
     }
 
     /** Tele: margen de seguridad en los bordes (algunas recortan la imagen) y pestañas arriba. */
@@ -132,21 +210,96 @@ class MainActivity : AppCompatActivity() {
         (findViewById<View>(R.id.barra).layoutParams as ViewGroup.MarginLayoutParams).setMargins(lado, borde, lado, 0)
         (pestanas.layoutParams as ViewGroup.MarginLayoutParams).setMargins(lado, 0, lado, dp(4))
         (findViewById<View>(R.id.contenido).layoutParams as ViewGroup.MarginLayoutParams).setMargins(lado, 0, lado, borde)
-        pestanas.addTab(pestanas.newTab().setText("Películas").setId(R.id.nav_peliculas))
-        pestanas.addTab(pestanas.newTab().setText("Descargas").setId(R.id.nav_descargas))
         pestanas.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
-            override fun onTabSelected(tab: TabLayout.Tab) = mostrarPestana(tab.id)
+            override fun onTabSelected(tab: TabLayout.Tab) {
+                if (cambiandoSecciones) return
+                val destino = tab.tag as? Destino ?: return
+                pestana = destino.pestana
+                if (destino.pestana == R.id.nav_peliculas) {
+                    seccion = destino.seccion
+                    alCambiarSeccion()
+                } else {
+                    mostrarPestana()
+                }
+            }
+
             override fun onTabUnselected(tab: TabLayout.Tab) = Unit
             override fun onTabReselected(tab: TabLayout.Tab) = Unit
         })
     }
 
+    /** Cada pestaña de la tele: Inicio, una por sección y Descargas. */
+    private data class Destino(val pestana: Int, val seccion: String?)
+
+    /** Las secciones que se pueden elegir (con una sola no hace falta elegir: Inicio ya es esa sección). */
+    private fun seccionesVisibles(): List<Seccion> =
+        catalogo?.takeIf { it.agrupado }?.secciones?.takeIf { it.size > 1 }.orEmpty()
+
+    /** Pestañas de la tele o chips del móvil según las secciones que haya. */
+    private fun pintarSecciones() {
+        val lista = seccionesVisibles()
+        if (catalogo != null && seccion != null && lista.none { it.id == seccion }) seccion = null
+        cambiandoSecciones = true
+        if (tele) {
+            if (lista != seccionesPintadas || pestanas.tabCount == 0) {
+                pestanas.removeAllTabs()
+                pestanas.addTab(pestanas.newTab().setText("Inicio").setTag(Destino(R.id.nav_peliculas, null)), false)
+                lista.forEach { pestanas.addTab(pestanas.newTab().setText(it.titulo).setTag(Destino(R.id.nav_peliculas, it.id)), false) }
+                pestanas.addTab(pestanas.newTab().setText("Descargas").setTag(Destino(R.id.nav_descargas, null)), false)
+            }
+            val actual = Destino(pestana, if (pestana == R.id.nav_peliculas) seccion else null)
+            (0 until pestanas.tabCount).mapNotNull { pestanas.getTabAt(it) }.firstOrNull { it.tag == actual }
+                ?.takeIf { !it.isSelected }?.select()
+        } else {
+            if (lista != seccionesPintadas) {
+                chipsSecciones.removeAllViews()
+                for (s in lista) {
+                    val chip = layoutInflater.inflate(R.layout.item_chip, chipsSecciones, false) as Chip
+                    chip.id = View.generateViewId()
+                    chip.text = s.titulo
+                    chip.tag = s.id
+                    chipsSecciones.addView(chip)
+                }
+            }
+            val elegido = chipsSecciones.children.firstOrNull { it.tag == seccion }
+            if (elegido != null) chipsSecciones.check(elegido.id) else chipsSecciones.clearCheck()
+            barraSecciones.isVisible = lista.isNotEmpty() && pestana == R.id.nav_peliculas
+        }
+        seccionesPintadas = lista
+        cambiandoSecciones = false
+        actualizarAtras()
+    }
+
+    private fun elegirSeccion(id: String?) {
+        seccion = id
+        pintarSecciones()
+        alCambiarSeccion()
+    }
+
+    private fun alCambiarSeccion() {
+        if (pestana != R.id.nav_peliculas) {
+            pestana = R.id.nav_peliculas
+            if (!tele) navegacion.selectedItemId = R.id.nav_peliculas
+        }
+        mostrarPestana()
+        listaPeliculas.scrollToPosition(0)
+    }
+
     /** Cambia de pestaña como si se hubiera pulsado (abajo en el móvil, arriba en la tele). */
     private fun elegirPestana(id: Int) {
         if (tele) {
-            (0 until pestanas.tabCount).mapNotNull { pestanas.getTabAt(it) }.firstOrNull { it.id == id }?.select()
-        } else {
+            val destino = Destino(id, if (id == R.id.nav_peliculas) seccion else null)
+            val tab = (0 until pestanas.tabCount).mapNotNull { pestanas.getTabAt(it) }.firstOrNull { it.tag == destino }
+            if (tab != null && !tab.isSelected) tab.select() else if (pestana != id) {
+                pestana = id
+                mostrarPestana()
+            }
+        } else if (navegacion.selectedItemId != id) {
             navegacion.selectedItemId = id
+        } else if (pestana != id) {
+            // Ya marcada abajo: volver a marcarla contaría como tocarla otra vez (y volvería a Inicio).
+            pestana = id
+            mostrarPestana()
         }
     }
 
@@ -164,12 +317,14 @@ class MainActivity : AppCompatActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putInt("pestana", pestana)
+        outState.putString("seccion", seccion)
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.principal, menu)
-        val buscador = menu.findItem(R.id.accion_buscar).actionView as SearchView
-        buscador.queryHint = "Buscar película…"
+        val elementoBuscar = menu.findItem(R.id.accion_buscar)
+        val buscador = elementoBuscar.actionView as SearchView
+        buscador.queryHint = "Buscar película o serie…"
         buscador.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
             override fun onQueryTextSubmit(texto: String?): Boolean {
                 buscador.clearFocus()
@@ -179,6 +334,20 @@ class MainActivity : AppCompatActivity() {
             override fun onQueryTextChange(texto: String?): Boolean {
                 filtro = texto.orEmpty()
                 pintar()
+                return true
+            }
+        })
+        // Con el buscador abierto, Atrás lo cierra (y no cambia de sección).
+        elementoBuscar.setOnActionExpandListener(object : MenuItem.OnActionExpandListener {
+            override fun onMenuItemActionExpand(item: MenuItem): Boolean {
+                buscando = true
+                actualizarAtras()
+                return true
+            }
+
+            override fun onMenuItemActionCollapse(item: MenuItem): Boolean {
+                buscando = false
+                actualizarAtras()
                 return true
             }
         })
@@ -228,21 +397,21 @@ class MainActivity : AppCompatActivity() {
 
     private fun cargar() {
         if (cargaEnCurso?.isActive == true) return
-        cargando.isVisible = peliculas.isEmpty() && pestana == R.id.nav_peliculas
+        cargando.isVisible = catalogo == null && pestana == R.id.nav_peliculas
         vacio.isVisible = false
         cargaEnCurso = lifecycleScope.launch {
             try {
-                val api = sesion.api()
-                peliculas = api.peliculas().map { conProgresoLocal(api, it) }
+                catalogo = cargarCatalogo(sesion, progresoLocal)
                 ultimoError = null
             } catch (e: ErrorApi) {
                 if (e.codigo == 401) {
                     sesion.cerrar()
+                    CatalogoActual.catalogo = null
                     irALogin("Tu sesión ha terminado. Vuelve a entrar.")
                     return@launch
                 }
                 ultimoError = e.message
-                if (peliculas.isEmpty() && descargas.todas().isNotEmpty() && pestana != R.id.nav_descargas) {
+                if (catalogo?.peliculas.isNullOrEmpty() && descargas.todas().isNotEmpty() && pestana != R.id.nav_descargas) {
                     elegirPestana(R.id.nav_descargas)
                     aviso("Sin conexión con MiCine. Aquí tienes tus descargas.")
                 } else {
@@ -250,53 +419,82 @@ class MainActivity : AppCompatActivity() {
                 }
             } finally {
                 cargando.isVisible = false
+                pintarSecciones()
                 pintar()
             }
         }
     }
 
-    /** Lo visto sin conexión manda si es más reciente; de paso se lo cuenta al servidor. */
-    private fun conProgresoLocal(api: Api, pelicula: Pelicula): Pelicula {
-        val local = progresoLocal.leer(pelicula.ruta) ?: return pelicula
-        val remoto = pelicula.progreso
-        if (remoto != null && remoto.fecha >= local.fecha) return pelicula
-        ambitoApp.launch { runCatching { api.progreso(pelicula.ruta, local.segundos, local.duracion) } }
-        return pelicula.copy(progreso = local)
-    }
-
-    private fun mostrarPestana(id: Int) {
-        pestana = id
-        listaPeliculas.isVisible = id == R.id.nav_peliculas
-        listaDescargas.isVisible = id == R.id.nav_descargas
-        cargando.isVisible = cargando.isVisible && id == R.id.nav_peliculas
+    private fun mostrarPestana() {
+        listaPeliculas.isVisible = pestana == R.id.nav_peliculas
+        listaDescargas.isVisible = pestana == R.id.nav_descargas
+        barraSecciones.isVisible = !tele && pestana == R.id.nav_peliculas && seccionesVisibles().isNotEmpty()
+        cargando.isVisible = cargando.isVisible && pestana == R.id.nav_peliculas
         refrescarDescargas()
         pintar()
+        actualizarAtras()
+    }
+
+    private fun actualizarAtras() {
+        atras.isEnabled = !soloDescargas && !buscando &&
+            (pestana == R.id.nav_descargas || (seccion != null && seccionesVisibles().isNotEmpty()))
     }
 
     private fun pintar() {
         val consulta = normalizar(filtro.trim())
-        val mensaje = if (pestana == R.id.nav_peliculas) {
-            val lista = peliculas.filter { normalizar("${it.titulo} ${it.ruta}").contains(consulta) }
-            adaptadorPeliculas.actualizar(lista)
-            when {
+        val mensaje = if (pestana == R.id.nav_peliculas) pintarCatalogo(consulta) else pintarDescargas(consulta)
+        vacio.text = mensaje
+        vacio.isVisible = mensaje.isNotEmpty()
+        enfocarInicio()
+    }
+
+    /** Devuelve el mensaje que se enseña si no hay nada que ver. */
+    private fun pintarCatalogo(consulta: String): String {
+        val catalogo = catalogo
+        val elementos = mutableListOf<Elemento>()
+        var mensaje = ""
+        if (catalogo == null || !catalogo.agrupado) {
+            // Servidor antiguo (o aún sin datos): la lista plana de siempre.
+            val todas = catalogo?.peliculas.orEmpty()
+            val lista = todas.filter { normalizar("${it.titulo} ${it.ruta}").contains(consulta) }
+            lista.mapTo(elementos) { ElementoTarjeta(tarjetaPlana(it)) }
+            mensaje = when {
                 cargando.isVisible -> ""
-                peliculas.isEmpty() && ultimoError != null -> ultimoError!!
-                peliculas.isEmpty() -> "Todavía no hay películas en MiCine.\n\nSúbelas desde la web en el ordenador."
+                todas.isEmpty() && ultimoError != null -> ultimoError!!
+                todas.isEmpty() -> "Todavía no hay películas en MiCine.\n\nCopia tus películas y series a las carpetas de MiCine en el ordenador."
                 lista.isEmpty() -> "Ninguna película coincide con «$filtro»."
                 else -> ""
             }
         } else {
-            val lista = descargas.todas().filter { normalizar(it.titulo).contains(consulta) }
-            adaptadorDescargas.actualizar(lista)
+            val descargadas = descargas.rutasCompletas()
+            val elegida = seccionesVisibles().firstOrNull { it.id == seccion }
             when {
-                lista.isEmpty() && consulta.isNotEmpty() -> "Ninguna descarga coincide con «$filtro»."
-                lista.isEmpty() -> "Aún no has descargado ninguna película.\n\nToca el botón de descarga de una película para guardarla en el móvil y verla sin conexión."
-                else -> ""
+                consulta.isNotEmpty() -> {
+                    val lista = catalogo.buscar(consulta, elegida?.id, descargadas)
+                    lista.mapTo(elementos) { ElementoTarjeta(it) }
+                    if (lista.isEmpty()) mensaje = "Nada coincide con «$filtro»" + (elegida?.let { " en ${it.titulo}" } ?: "") + "."
+                }
+                elegida != null || catalogo.secciones.size == 1 -> {
+                    val pagina = catalogo.paginaSeccion(elegida ?: catalogo.secciones.first(), descargadas)
+                    pagina.filas.mapTo(elementos) { ElementoFila(it) }
+                    if (pagina.filas.isNotEmpty() && pagina.todas.isNotEmpty()) elementos += ElementoCabecera(pagina.tituloTodas)
+                    pagina.todas.mapTo(elementos) { ElementoTarjeta(it) }
+                }
+                else -> catalogo.filasInicio(descargadas).mapTo(elementos) { ElementoFila(it) }
             }
         }
-        vacio.text = mensaje
-        vacio.isVisible = mensaje.isNotEmpty()
-        enfocarInicio()
+        adaptadorCatalogo.actualizar(elementos)
+        return mensaje
+    }
+
+    private fun pintarDescargas(consulta: String): String {
+        val lista = descargas.todas().filter { normalizar(it.titulo).contains(consulta) }
+        adaptadorDescargas.actualizar(lista)
+        return when {
+            lista.isEmpty() && consulta.isNotEmpty() -> "Ninguna descarga coincide con «$filtro»."
+            lista.isEmpty() -> "Aún no has descargado nada.\n\nToca el botón de descarga de una película o de un episodio para guardarlo en el móvil y verlo sin conexión."
+            else -> ""
+        }
     }
 
     /** En la tele, al abrir, el mando empieza en la primera carátula (o en la primera descarga). */
@@ -309,8 +507,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun enfocarPrimero(lista: RecyclerView, intentos: Int) {
+        // En una fila, la primera carátula de la fila (es la primera «tarjeta» que se encuentra dentro).
         val fila = lista.findViewHolderForAdapterPosition(0)?.itemView
-        val destino = fila?.findViewById<View>(R.id.tarjeta) ?: fila
+        val destino = fila?.findViewById<View>(R.id.tarjeta) ?: fila?.takeIf { it.isFocusable }
         if (destino != null) {
             destino.requestFocus()
         } else if (intentos > 0) {
@@ -318,134 +517,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun idDe(ruta: String): Long = ids.getOrPut(ruta) { ids.size.toLong() }
-
-    /** Carátula elegida con el mando: borde blanco y un poco más grande. */
-    private fun resaltar(tarjeta: MaterialCardView, foco: Boolean, animar: Boolean) {
-        tarjeta.setStrokeColor(ColorStateList.valueOf(if (foco) Color.WHITE else ContextCompat.getColor(this, R.color.borde)))
-        tarjeta.strokeWidth = dp(if (foco) 3 else 1)
-        val escala = if (foco) 1.06f else 1f
-        tarjeta.animate().cancel()
-        if (animar) {
-            tarjeta.animate().scaleX(escala).scaleY(escala).setDuration(150).start()
-        } else {
-            tarjeta.scaleX = escala
-            tarjeta.scaleY = escala
-        }
-    }
-
     private fun refrescarDescargas() {
         if (!::listaPeliculas.isInitialized) return
-        val infos = descargas.todas().associate { it.ruta to descargas.info(it) }
-        adaptadorPeliculas.actualizarInfos(infos)
-        adaptadorDescargas.actualizarInfos(infos)
+        val nuevas = descargas.todas().associate { it.ruta to descargas.info(it) }
+        if (nuevas == infos) return
+        val otras = nuevas.keys != infos.keys
+        infos = nuevas
+        adaptadorCatalogo.refrescarDescargas()
+        adaptadorDescargas.actualizarInfos(otras)
     }
 
     // ---------- acciones ----------
 
-    private fun reproducir(pelicula: Pelicula) {
-        val local = descargas.de(pelicula.ruta)?.takeIf { descargas.completa(it) }
-        abrirReproductor(pelicula.ruta, pelicula.titulo, pelicula.progreso, pelicula, local)
-    }
-
-    private fun reproducirDescarga(descarga: Descarga) {
-        val info = descargas.info(descarga)
-        val pelicula = peliculas.firstOrNull { it.ruta == descarga.ruta }
-        when {
-            info.estado == EstadoDescarga.COMPLETA && File(descarga.archivo).exists() ->
-                abrirReproductor(descarga.ruta, descarga.titulo, pelicula?.progreso, pelicula, descarga)
-            info.estado == EstadoDescarga.FALLIDA ->
-                if (pelicula != null) iniciarDescarga(pelicula) else aviso("Conéctate a MiCine para reintentar la descarga")
-            pelicula != null ->
-                MaterialAlertDialogBuilder(this)
-                    .setTitle(descarga.titulo)
-                    .setMessage("Todavía se está descargando (${(info.fraccion * 100).toInt()} %). Mientras tanto puedes verla por internet desde MiCine.")
-                    .setPositiveButton("Ver ahora") { _, _ -> abrirReproductor(pelicula.ruta, pelicula.titulo, pelicula.progreso, pelicula, null) }
-                    .setNegativeButton("Esperar", null)
-                    .show()
-            else -> aviso("Todavía se está descargando (${(info.fraccion * 100).toInt()} %)")
-        }
-    }
-
-    private fun abrirReproductor(ruta: String, titulo: String, remoto: Progreso?, pelicula: Pelicula?, local: Descarga?) {
-        val progreso = listOfNotNull(remoto, progresoLocal.leer(ruta)).maxByOrNull { it.fecha }
-        val inicioMs = progreso?.takeIf { !it.vista && it.segundos > 15 }?.let { (it.segundos * 1000).toLong() } ?: 0L
-        val api = sesion.api()
-        val origen = local?.archivo ?: api.absoluta(pelicula!!.url)
-        val subtitulos = local?.subtitulos?.filter { File(it.archivo).exists() }?.map { Uri.fromFile(File(it.archivo)).toString() }
-            ?: pelicula!!.subtitulos.map { api.absoluta(it.url) + "&original=1" }
-        startActivity(
-            Intent(this, ReproductorActivity::class.java)
-                .putExtra(ReproductorActivity.EXTRA_TITULO, titulo)
-                .putExtra(ReproductorActivity.EXTRA_RUTA, ruta)
-                .putExtra(ReproductorActivity.EXTRA_ORIGEN, origen)
-                .putStringArrayListExtra(ReproductorActivity.EXTRA_SUBTITULOS, ArrayList(subtitulos))
-                .putExtra(ReproductorActivity.EXTRA_INICIO_MS, inicioMs),
-        )
-    }
-
-    private fun pulsarDescarga(pelicula: Pelicula) {
-        val descarga = descargas.de(pelicula.ruta)
-        val info = descarga?.let { descargas.info(it) }
-        when {
-            info?.estado == EstadoDescarga.COMPLETA ->
-                Snackbar.make(navegacion, "«${pelicula.titulo}» ya está en el móvil", Snackbar.LENGTH_SHORT)
-                    .setAnchorView(navegacion.takeIf { it.isVisible })
-                    .setAction("Ver descargas") { elegirPestana(R.id.nav_descargas) }
-                    .show()
-            info?.activa == true ->
-                MaterialAlertDialogBuilder(this)
-                    .setTitle("¿Cancelar la descarga?")
-                    .setMessage(pelicula.titulo)
-                    .setPositiveButton("Cancelar descarga") { _, _ ->
-                        descargas.borrar(descarga)
-                        refrescarDescargas()
-                        pintar()
-                    }
-                    .setNegativeButton("Seguir descargando", null)
-                    .show()
-            else -> {
-                val libre = descargas.espacioLibre()
-                if (pelicula.tamano > libre - 200L * 1024 * 1024) {
-                    MaterialAlertDialogBuilder(this)
-                        .setTitle("No hay espacio suficiente")
-                        .setMessage("«${pelicula.titulo}» ocupa ${formatoTamano(pelicula.tamano)} y en el móvil quedan ${formatoTamano(libre)} libres.")
-                        .setPositiveButton("Entendido", null)
-                        .show()
-                    return
-                }
-                MaterialAlertDialogBuilder(this)
-                    .setTitle("Descargar película")
-                    .setMessage("«${pelicula.titulo}» ocupa ${formatoTamano(pelicula.tamano)}. Podrás verla sin conexión desde la pestaña Descargas.\n\nLibre en el móvil: ${formatoTamano(libre)}")
-                    .setPositiveButton("Descargar") { _, _ -> iniciarDescarga(pelicula) }
-                    .setNegativeButton("Cancelar", null)
-                    .show()
-            }
-        }
-    }
-
-    private fun iniciarDescarga(pelicula: Pelicula) {
-        try {
-            descargas.iniciar(sesion.api(), pelicula)
-            aviso("Descargando «${pelicula.titulo}». Puedes seguir usando el móvil.")
-        } catch (e: Exception) {
-            aviso("No se pudo empezar la descarga: ${e.message}")
-        }
-        refrescarDescargas()
-        pintar()
-    }
-
-    private fun confirmarBorrar(descarga: Descarga) {
-        MaterialAlertDialogBuilder(this)
-            .setTitle("¿Borrar la descarga?")
-            .setMessage("«${descarga.titulo}» se borrará del móvil. Seguirá disponible en MiCine.")
-            .setPositiveButton("Borrar") { _, _ ->
-                descargas.borrar(descarga)
-                refrescarDescargas()
-                pintar()
-            }
-            .setNegativeButton("Cancelar", null)
-            .show()
+    private fun abrirFicha(obra: String) {
+        startActivity(Intent(this, FichaActivity::class.java).putExtra(FichaActivity.EXTRA_OBRA, obra))
     }
 
     private fun confirmarSalir() {
@@ -456,6 +541,7 @@ class MainActivity : AppCompatActivity() {
                 val api = sesion.api()
                 ambitoApp.launch { runCatching { api.logout() } }
                 sesion.cerrar()
+                CatalogoActual.catalogo = null
                 irALogin(null)
             }
             .setNegativeButton("Cancelar", null)
@@ -467,102 +553,16 @@ class MainActivity : AppCompatActivity() {
         finish()
     }
 
-    private fun aviso(texto: String) {
-        Snackbar.make(navegacion, texto, Snackbar.LENGTH_LONG).setAnchorView(navegacion.takeIf { it.isVisible }).show()
+    private fun aviso(texto: String, boton: String? = null, accion: (() -> Unit)? = null) {
+        val barra = Snackbar.make(navegacion, texto, Snackbar.LENGTH_LONG).setAnchorView(navegacion.takeIf { it.isVisible })
+        if (boton != null && accion != null) barra.setAction(boton) { accion() }
+        barra.show()
     }
 
-    // ---------- listas ----------
-
-    private inner class AdaptadorPeliculas : RecyclerView.Adapter<AdaptadorPeliculas.Celda>() {
-        private var lista: List<Pelicula> = emptyList()
-        private var infos: Map<String, InfoDescarga> = emptyMap()
-
-        init {
-            setHasStableIds(true)
-        }
-
-        inner class Celda(vista: View) : RecyclerView.ViewHolder(vista) {
-            val tarjeta: MaterialCardView = vista.findViewById(R.id.tarjeta)
-            val poster: ImageView = vista.findViewById(R.id.poster)
-            val sinPoster: View = vista.findViewById(R.id.sinPoster)
-            val inicial: TextView = vista.findViewById(R.id.inicial)
-            val nombre: TextView = vista.findViewById(R.id.nombre)
-            val chapaVista: TextView = vista.findViewById(R.id.vista)
-            val progreso: LinearProgressIndicator = vista.findViewById(R.id.progreso)
-            val botonDescarga: View = vista.findViewById(R.id.botonDescarga)
-            val iconoDescarga: ImageView = vista.findViewById(R.id.iconoDescarga)
-            val progresoDescarga: CircularProgressIndicator = vista.findViewById(R.id.progresoDescarga)
-            val titulo: TextView = vista.findViewById(R.id.titulo)
-            val meta: TextView = vista.findViewById(R.id.meta)
-        }
-
-        @SuppressLint("NotifyDataSetChanged")
-        fun actualizar(nueva: List<Pelicula>) {
-            lista = nueva
-            notifyDataSetChanged()
-        }
-
-        fun actualizarInfos(nuevas: Map<String, InfoDescarga>) {
-            if (nuevas == infos) return
-            infos = nuevas
-            notifyItemRangeChanged(0, itemCount, CAMBIO_DESCARGA)
-        }
-
-        override fun getItemCount() = lista.size
-
-        override fun getItemId(posicion: Int) = idDe(lista[posicion].ruta)
-
-        override fun onCreateViewHolder(padre: ViewGroup, tipo: Int): Celda {
-            val celda = Celda(LayoutInflater.from(padre.context).inflate(R.layout.item_pelicula, padre, false))
-            celda.tarjeta.setOnFocusChangeListener { _, foco -> resaltar(celda.tarjeta, foco, animar = true) }
-            return celda
-        }
-
-        override fun onBindViewHolder(celda: Celda, posicion: Int, cambios: MutableList<Any>) {
-            if (cambios.isNotEmpty() && cambios.all { it == CAMBIO_DESCARGA }) pintarDescarga(celda, lista[posicion])
-            else onBindViewHolder(celda, posicion)
-        }
-
-        override fun onBindViewHolder(celda: Celda, posicion: Int) {
-            val p = lista[posicion]
-            celda.titulo.text = p.titulo
-            celda.meta.text = listOf(p.carpeta, formatoTamano(p.tamano)).filter { it.isNotEmpty() }.joinToString(" · ")
-            celda.sinPoster.background = Imagenes.degradado(p.titulo)
-            celda.inicial.text = p.titulo.trim().take(1).uppercase()
-            celda.nombre.text = p.titulo
-            Imagenes.cargar(celda.poster, p.poster?.let { sesion.api().absoluta(it) })
-            val progreso = p.progreso
-            celda.chapaVista.isVisible = progreso?.vista == true
-            celda.progreso.isVisible = progreso != null && progreso.fraccion > 0.01f && !progreso.vista
-            celda.progreso.progress = ((progreso?.fraccion ?: 0f) * 1000).toInt()
-            celda.tarjeta.setOnClickListener { reproducir(p) }
-            resaltar(celda.tarjeta, celda.tarjeta.isFocused, animar = false)
-            celda.tarjeta.contentDescription = "Ver ${p.titulo}"
-            celda.botonDescarga.setOnClickListener { pulsarDescarga(p) }
-            pintarDescarga(celda, p)
-        }
-
-        private fun pintarDescarga(celda: Celda, p: Pelicula) {
-            val info = infos[p.ruta]
-            val completa = info?.estado == EstadoDescarga.COMPLETA
-            celda.iconoDescarga.isVisible = info?.activa != true
-            celda.iconoDescarga.setImageResource(if (completa) R.drawable.ic_descargada else R.drawable.ic_descargar)
-            celda.iconoDescarga.imageTintList = ColorStateList.valueOf(
-                ContextCompat.getColor(this@MainActivity, if (completa) R.color.exito else android.R.color.white),
-            )
-            celda.progresoDescarga.isVisible = info?.activa == true
-            if (info?.activa == true) celda.progresoDescarga.setProgressCompat((info.fraccion * 100).toInt(), true)
-            celda.botonDescarga.contentDescription = when {
-                completa -> "Descargada"
-                info?.activa == true -> "Descargando; toca para cancelar"
-                else -> "Descargar para ver sin conexión"
-            }
-        }
-    }
+    // ---------- descargas ----------
 
     private inner class AdaptadorDescargas : RecyclerView.Adapter<AdaptadorDescargas.Fila>() {
         private var lista: List<Descarga> = emptyList()
-        private var infos: Map<String, InfoDescarga> = emptyMap()
 
         init {
             setHasStableIds(true)
@@ -573,6 +573,7 @@ class MainActivity : AppCompatActivity() {
             val inicial: TextView = vista.findViewById(R.id.inicial)
             val poster: ImageView = vista.findViewById(R.id.poster)
             val titulo: TextView = vista.findViewById(R.id.titulo)
+            val subtitulo: TextView = vista.findViewById(R.id.subtitulo)
             val estado: TextView = vista.findViewById(R.id.estado)
             val barra: LinearProgressIndicator = vista.findViewById(R.id.barra)
             val borrar: ImageButton = vista.findViewById(R.id.borrar)
@@ -584,17 +585,15 @@ class MainActivity : AppCompatActivity() {
             notifyDataSetChanged()
         }
 
-        fun actualizarInfos(nuevas: Map<String, InfoDescarga>) {
-            if (nuevas == infos) return
-            val habiaNuevas = nuevas.keys != infos.keys
-            infos = nuevas
-            if (habiaNuevas && pestana == R.id.nav_descargas) pintar()
+        /** [otras]: ha aparecido o desaparecido alguna descarga (hay que rehacer la lista). */
+        fun actualizarInfos(otras: Boolean) {
+            if (otras && pestana == R.id.nav_descargas) pintar()
             else notifyItemRangeChanged(0, itemCount, CAMBIO_DESCARGA)
         }
 
         override fun getItemCount() = lista.size
 
-        override fun getItemId(posicion: Int) = idDe(lista[posicion].ruta)
+        override fun getItemId(posicion: Int) = ids.de(lista[posicion].ruta)
 
         override fun onCreateViewHolder(padre: ViewGroup, tipo: Int) =
             Fila(LayoutInflater.from(padre.context).inflate(R.layout.item_descarga, padre, false))
@@ -606,12 +605,16 @@ class MainActivity : AppCompatActivity() {
 
         override fun onBindViewHolder(fila: Fila, posicion: Int) {
             val d = lista[posicion]
-            fila.titulo.text = d.titulo
-            fila.fondoPoster.background = Imagenes.degradado(d.titulo)
-            fila.inicial.text = d.titulo.trim().take(1).uppercase()
+            // Un episodio enseña su serie y, debajo, «T1·E2 · Nombre» (también sin conexión).
+            val nombre = d.serie ?: d.titulo
+            fila.titulo.text = nombre
+            fila.subtitulo.text = d.detalleEpisodio
+            fila.subtitulo.isVisible = d.detalleEpisodio != null
+            fila.fondoPoster.background = Imagenes.degradado(nombre)
+            fila.inicial.text = nombre.trim().take(1).uppercase()
             Imagenes.cargar(fila.poster, d.poster?.takeIf { File(it).exists() }, anchoMaximo = 160)
-            fila.itemView.setOnClickListener { reproducirDescarga(d) }
-            fila.borrar.setOnClickListener { confirmarBorrar(d) }
+            fila.itemView.setOnClickListener { acciones.reproducirDescarga(d) }
+            fila.borrar.setOnClickListener { acciones.confirmarBorrar(d) }
             pintarEstado(fila, d)
         }
 
@@ -641,6 +644,9 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         const val EXTRA_SIN_CONEXION = "sin_conexion"
+
+        /** Desde la ficha de una serie: «Ver descargas». */
+        const val EXTRA_VER_DESCARGAS = "ver_descargas"
         private const val CAMBIO_DESCARGA = "descarga"
     }
 }

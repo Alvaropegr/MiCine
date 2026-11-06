@@ -87,6 +87,24 @@ html.reproduciendo, html.reproduciendo body { background: transparent; }
 .menu-item .icono { width: 30px; height: 30px; margin: -4px 12px 0 0; }
 .menu-item.foco { background: #f2f2f5; color: #0b0b0f; }
 
+/* Con secciones: pestañas junto al logo y acciones redondas (su nombre sale debajo al enfocarlas). */
+.menu-secciones { position: absolute; left: 290px; top: 4px; white-space: nowrap; }
+.menu-seccion { position: relative; margin: 0 6px 0 0; padding: 10px 26px; font-size: 30px; }
+.inicio .menu { z-index: 3; }
+.menu-seccion.activa { color: #fff; }
+.menu-seccion.activa:after {
+  content: ''; position: absolute; left: 26px; right: 26px; bottom: 0; height: 4px; border-radius: 2px;
+  background: #e5484d;
+}
+.menu-seccion.activa.foco { color: #0b0b0f; }
+.menu-item.redondo { position: relative; margin-left: 14px; padding: 10px 16px; }
+.menu-item.redondo .icono { margin: -4px 0 0 0; }
+.menu-etiqueta {
+  display: none; position: absolute; right: 0; top: 66px; padding: 6px 18px; border-radius: 10px;
+  background: #f2f2f5; color: #0b0b0f; font-size: 24px; font-weight: bold; white-space: nowrap;
+}
+.menu-item.redondo.foco .menu-etiqueta { display: block; }
+
 .heroe { position: absolute; left: 96px; top: 170px; width: 1200px; }
 .heroe h1, .detalle h1 {
   font-size: 76px; line-height: 1.1; max-height: 170px; overflow: hidden;
@@ -94,6 +112,11 @@ html.reproduciendo, html.reproduciendo body { background: transparent; }
 }
 .meta { margin-top: 18px; font-size: 30px; color: #d0d0d6; }
 .info { margin-top: 12px; font-size: 28px; line-height: 1.4; color: #a3a3ad; }
+/* Sinopsis: como mucho tres líneas (con «…» donde se entienda). */
+.info.sinopsis {
+  color: #c8c8d0; max-height: 118px; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+}
 .progreso { margin-top: 24px; font-size: 26px; color: #d0d0d6; }
 .progreso .barra {
   display: inline-block; vertical-align: middle; width: 300px; height: 8px; margin-right: 20px;
@@ -114,6 +137,7 @@ html.reproduciendo, html.reproduciendo body { background: transparent; }
   -webkit-transition: -webkit-transform .3s; transition: transform .3s;
 }
 .fila { height: 420px; }
+.fila.sin-titulo { height: 360px; }
 .fila-titulo { margin-left: 96px; height: 60px; line-height: 60px; font-size: 34px; font-weight: bold; }
 .fila-tarjetas { white-space: nowrap; padding-left: 96px; }
 
@@ -139,6 +163,12 @@ html.reproduciendo, html.reproduciendo body { background: transparent; }
   background: rgba(0, 0, 0, .7); color: #4ade80; text-align: center;
 }
 .tarjeta-vista .icono { width: 26px; height: 26px; margin-top: 8px; }
+.tarjeta-etiqueta {
+  position: absolute; left: 10px; bottom: 18px; padding: 4px 12px; border-radius: 8px;
+  background: rgba(0, 0, 0, .78); color: #fff; font-size: 24px; font-weight: bold;
+}
+.tarjeta.todo { background: #17171d; border: 3px solid #2c2c35; }
+.tarjeta.todo .tarjeta-titulo { top: 110px; bottom: auto; text-align: center; font-size: 30px; color: #f2f2f5; }
 .tarjeta.foco {
   -webkit-transform: scale(1.12); transform: scale(1.12); z-index: 2;
   box-shadow: 0 0 0 5px #f2f2f5, 0 18px 40px rgba(0, 0, 0, .7);
@@ -155,14 +185,78 @@ html.reproduciendo, html.reproduciendo body { background: transparent; }
 .detalle h1 { font-size: 80px; max-height: 270px; }
 .detalle .botones { margin-top: 56px; }
 .detalle .botones .boton { display: block; width: 640px; margin-bottom: 20px; }
+/* Con secciones hay sinopsis y quizá «Otras versiones»: todo un poco más arriba y más junto. */
+.detalle.con-obra .detalle-texto { top: 110px; }
+.detalle.con-obra .info.sinopsis { max-height: 157px; -webkit-line-clamp: 4; }
+.detalle.con-obra .botones { margin-top: 40px; }
+.detalle.con-obra .botones .boton { margin-bottom: 16px; }
+
+/* ── Ficha de una serie ───────────────────────────────────────────── */
+
+.serie .velo {
+  background: -webkit-linear-gradient(left, #0b0b0f 0%, rgba(11, 11, 15, .9) 42%, rgba(11, 11, 15, .72) 100%);
+  background: linear-gradient(to right, #0b0b0f 0%, rgba(11, 11, 15, .9) 42%, rgba(11, 11, 15, .72) 100%);
+}
+.serie .fondo-difuso.lista { opacity: .5; }
+.serie-datos { position: absolute; left: 96px; top: 110px; width: 720px; }
+.serie h1 {
+  font-size: 68px; line-height: 1.1; max-height: 225px; overflow: hidden;
+  text-shadow: 0 4px 24px rgba(0, 0, 0, .6);
+}
+.serie .info.sinopsis { max-height: 275px; -webkit-line-clamp: 7; }
+.serie .progreso .barra { width: 220px; }
+.serie .botones { margin-top: 44px; }
+.serie .botones .boton { display: block; width: 600px; margin-bottom: 18px; }
+
+.temporadas-marco { position: absolute; left: 900px; top: 106px; width: 924px; height: 70px; overflow: hidden; }
+.temporadas { white-space: nowrap; -webkit-transition: -webkit-transform .3s; transition: transform .3s; }
+.temporada {
+  display: inline-block; margin-right: 14px; padding: 10px 28px; border-radius: 40px;
+  font-size: 28px; color: #a3a3ad; background: rgba(255, 255, 255, .08);
+}
+.temporada.activa { color: #f2f2f5; font-weight: bold; background: rgba(255, 255, 255, .2); }
+.temporada.foco { background: #f2f2f5; color: #0b0b0f; }
+.temporada.sola { padding-left: 0; background: none; color: #f2f2f5; font-size: 34px; font-weight: bold; }
+
+.episodios-marco { position: absolute; left: 880px; top: 186px; width: 964px; height: 894px; overflow: hidden; }
+.episodios { padding: 10px 20px 0; -webkit-transition: -webkit-transform .3s; transition: transform .3s; }
+.episodio {
+  position: relative; height: 172px; margin-bottom: 16px; border-radius: 14px;
+  background: rgba(255, 255, 255, .06);
+}
+.episodio.foco { background: rgba(255, 255, 255, .16); box-shadow: 0 0 0 5px #f2f2f5; }
+.episodio.dentro { background: rgba(255, 255, 255, .16); box-shadow: 0 0 0 3px rgba(242, 242, 245, .4); }
+.episodio-imagen {
+  position: absolute; left: 14px; top: 14px; width: 256px; height: 144px; border-radius: 8px; overflow: hidden;
+  background: #22222a;
+}
+.episodio-imagen img {
+  width: 100%; height: 100%; object-fit: cover;
+  opacity: 0; -webkit-transition: opacity .3s; transition: opacity .3s;
+}
+.episodio-imagen img.lista { opacity: 1; }
+.episodio-imagen .tarjeta-vista { right: 8px; top: 8px; }
+.episodio-texto { position: absolute; left: 296px; top: 20px; right: 24px; }
+.episodio-titulo {
+  font-size: 32px; font-weight: bold; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.episodio-meta { margin-top: 6px; height: 34px; font-size: 25px; color: #a3a3ad; }
+.episodio-versiones { margin-top: 8px; white-space: nowrap; }
+.chip {
+  display: inline-block; margin-right: 12px; padding: 3px 16px; border-radius: 20px;
+  border: 2px solid rgba(255, 255, 255, .3); font-size: 23px; color: #c8c8d0;
+}
+.chip.activa { border-color: #f2f2f5; color: #f2f2f5; font-weight: bold; }
+.chip.foco { background: #f2f2f5; border-color: #f2f2f5; color: #0b0b0f; }
 
 /* ── Buscar ───────────────────────────────────────────────────────── */
 
 .buscador { position: absolute; left: 96px; top: 140px; width: 1000px; white-space: nowrap; }
 .buscador .icono { width: 40px; height: 40px; color: #a3a3ad; margin-right: 18px; }
 .buscador input { display: inline-block; width: 860px; vertical-align: middle; }
-.rejilla-marco { position: absolute; left: 96px; top: 260px; width: 1760px; height: 820px; overflow: hidden; }
-.rejilla { width: 1600px; padding-top: 6px; }
+/* El marco empieza 20 px antes que las tarjetas para que la enfocada (que crece) no se corte. */
+.rejilla-marco { position: absolute; left: 76px; top: 260px; width: 1780px; height: 820px; overflow: hidden; }
+.rejilla { width: 1620px; padding: 6px 0 0 20px; }
 .rejilla .tarjeta { margin: 20px 28px 60px 0; }
 .vacio { position: absolute; left: 96px; top: 300px; font-size: 32px; color: #a3a3ad; }
 
@@ -262,6 +356,25 @@ html.reproduciendo, html.reproduciendo body { background: transparent; }
 .panel-detalle { margin-left: 16px; font-size: 26px; font-weight: normal; opacity: .75; }
 .panel-ayuda { position: absolute; left: 260px; bottom: 80px; font-size: 28px; color: #a3a3ad; }
 
+/* «Siguiente episodio»: abajo a la derecha mientras acaba; al terminar, con la pantalla oscurecida. */
+.siguiente { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; pointer-events: none; }
+.siguiente.al-final { background: rgba(11, 11, 15, .85); }
+.siguiente-caja {
+  position: absolute; right: 96px; bottom: 96px; width: 900px; padding: 30px; border-radius: 18px;
+  background: rgba(11, 11, 15, .92); box-shadow: 0 20px 60px rgba(0, 0, 0, .6); pointer-events: auto;
+}
+.siguiente-imagen {
+  position: absolute; left: 30px; top: 30px; width: 256px; height: 144px; border-radius: 8px; object-fit: cover;
+  background: #22222a; opacity: 0; -webkit-transition: opacity .3s; transition: opacity .3s;
+}
+.siguiente-imagen.lista { opacity: 1; }
+.siguiente-texto { margin-left: 286px; min-height: 144px; }
+.siguiente-etiqueta { font-size: 24px; color: #a3a3ad; text-transform: uppercase; letter-spacing: 2px; }
+.siguiente-titulo { margin-top: 8px; font-size: 34px; font-weight: bold; line-height: 1.2; max-height: 82px; overflow: hidden; }
+.siguiente-cuenta { margin-top: 10px; font-size: 26px; color: #d0d0d6; }
+.siguiente-botones { margin-top: 26px; white-space: nowrap; }
+.siguiente-botones .boton { margin-right: 20px; }
+
 .error-video {
   position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; padding: 280px 300px 0;
   background: rgba(11, 11, 15, .95);
@@ -281,6 +394,15 @@ html.reproduciendo, html.reproduciendo body { background: transparent; }
 .dialogo h2 { font-size: 44px; margin-bottom: 16px; }
 .dialogo p { font-size: 30px; color: #a3a3ad; margin-bottom: 16px; }
 .dialogo-botones .boton { min-width: 240px; margin: 20px 14px 0; }
+.dialogo.eleccion {
+  left: 460px; top: 50%; width: 1000px; text-align: left;
+  -webkit-transform: translateY(-50%); transform: translateY(-50%);
+}
+.dialogo.eleccion h2 { margin-bottom: 26px; }
+.eleccion-item { padding: 16px 20px; border-radius: 10px; font-size: 32px; color: #a3a3ad; }
+.eleccion-item.activo { color: #f2f2f5; font-weight: bold; }
+.eleccion-item.foco { background: #f2f2f5; color: #0b0b0f; }
+.dialogo .eleccion-ayuda { margin: 26px 0 0; font-size: 26px; }
 .aviso {
   position: absolute; left: 560px; bottom: 80px; width: 800px; padding: 20px 30px; border-radius: 14px;
   background: #22222a; text-align: center; font-size: 28px;

@@ -17,6 +17,7 @@ import argparse
 import getpass
 import hashlib
 import hmac
+import http.client
 import ipaddress
 import json
 import math
@@ -29,8 +30,12 @@ import subprocess
 import threading
 import time
 import traceback
+import unicodedata
+import urllib.error
 import urllib.parse
+import urllib.request
 import webbrowser
+from collections import Counter, OrderedDict
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -53,8 +58,8 @@ CONFIG_POR_DEFECTO = {
     "direccion": "0.0.0.0",
     "carpeta_peliculas": "peliculas",
     "dias_sesion": 30,
-    "limite_subida_gb": 100,
     "abrir_navegador": True,
+    "tmdb": "",  # clave de themoviedb.org para identificar películas y series (vacía = solo por el nombre)
 }
 
 # Tipo MIME con el que se envía cada vídeo. Las .mkv se anuncian como WebM (un subconjunto
@@ -83,17 +88,16 @@ ESTATICOS = {
     ".css": "text/css; charset=utf-8",
     ".svg": "image/svg+xml",
 }
+# Las imágenes de TMDB solo salen en el buscador de «Identificar…» (administradores).
 CSP = (
-    "default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self'; "
+    "default-src 'self'; img-src 'self' data: https://image.tmdb.org; media-src 'self'; style-src 'self'; "
     "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 )
 COOKIE = "micine_sesion"
 TROZO = 1024 * 1024
 ITERACIONES = 600_000
-MARGEN_DISCO = 500 * 1024 * 1024
 DIAS_ENLACE = 7
 RE_USUARIO = re.compile(r"[\w.\-]{3,32}")
-RESERVADOS_WINDOWS = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(10)), *(f"LPT{i}" for i in range(10))}
 
 
 class ErrorPeticion(Exception):
@@ -305,11 +309,23 @@ class Almacen:
         mensaje = f"{usuario}\n{ruta}\n{expira}".encode("utf-8")
         return hmac.new(self.secreto, mensaje, hashlib.sha256).hexdigest()[:40]
 
-    def enlace(self, usuario: str, ruta: str) -> str:
+    @staticmethod
+    def _caducidad() -> int:
         # La caducidad cambia una vez al día: así el enlace es estable y las carátulas se cachean.
-        expira = (int(time.time()) // 86400 + DIAS_ENLACE + 1) * 86400
+        return (int(time.time()) // 86400 + DIAS_ENLACE + 1) * 86400
+
+    def enlace(self, usuario: str, ruta: str) -> str:
+        expira = self._caducidad()
         consulta = urllib.parse.urlencode({"u": usuario, "e": expira, "f": self._firma(usuario, ruta, expira)})
         return f"/media/{urllib.parse.quote(ruta)}?{consulta}"
+
+    def enlace_caratula(self, usuario: str, clave: str, version: int) -> str:
+        """Carátula sacada del vídeo. Se firma «caratula:<clave>»; «v» no va firmado: solo cambia el
+        enlace cuando se rehace la carátula, para que no se quede la vieja en la caché."""
+        expira = self._caducidad()
+        firma = self._firma(usuario, "caratula:" + clave, expira)
+        consulta = urllib.parse.urlencode({"u": usuario, "e": expira, "f": firma, "v": version})
+        return f"/caratula/{clave}.jpg?{consulta}"
 
     def usuario_de_enlace(self, ruta: str, consulta: dict) -> str | None:
         try:
@@ -378,6 +394,181 @@ def nombre_carpeta(carpeta: Path) -> str:
     return absoluta.name or f"Disco {absoluta.drive.rstrip(':')}"
 
 
+# --- Reconocer película o episodio por el nombre del archivo ---
+# (Nombres.cs de MiCine.exe hace exactamente lo mismo: las mismas expresiones y en el mismo orden.)
+
+# Carpetas de temporada: no dan el nombre de la serie, solo el número de temporada.
+RE_CARPETA_TEMPORADA = re.compile(r"^(?:season|temporada|temp\.?|series|serie|t)\s*[._-]?\s*(\d{1,2})$|^specials?$|^especiales$", re.I)
+# Episodios: S01E02 · 1x02 · Cap.103 · Temporada 1 Capitulo 2 · «Serie - 05 [1080p]» (anime)
+RE_SXXEYY = re.compile(r"(?<![a-z0-9])s(\d{1,2})[ ._-]?e(\d{1,3})(?![0-9])", re.I)
+RE_NXNN = re.compile(r"(?<![a-z0-9])(\d{1,2})x(\d{2,3})(?![0-9a-z])", re.I)
+RE_CAP = re.compile(r"cap(?:itulo|ítulo)?[ ._]*(\d{3,4})(?![0-9_])", re.I)
+RE_TEMP = re.compile(r"(?:temporada|season|temp\.?)\s*[._-]?\s*(\d{1,2})(?![0-9])", re.I)
+RE_EPISODIO = re.compile(r"(?:episodio|episode|cap(?:itulo|ítulo)?|ep|e)[ ._-]*(\d{1,3})(?![0-9])", re.I)
+RE_ABSOLUTO = re.compile(r"\s-\s(\d{1,4})(?:v\d)?\s*(?:[\[(]|$)")
+RE_INICIO_NUM = re.compile(r"^(\d{1,3})(?:\s*[-._]\s*|\s+)(?=\D)")
+# Lo que viene detrás del título en los nombres de descargas: calidad, origen, audio, idioma…
+CORTE = (r"(?:2160p?|1080p?|720p?|480p?|576p?|4k|uhd|hdr10?|hdr|dv|hevc|x\.?26[45]|h\.?26[45]|xvid|divx|av1|"
+         r"blu-?ray|bd-?rip|br-?rip|bdremux|remux|dvd-?rip|dvd|dvdscr|hd-?rip|web-?dl|web-?rip|web|hdtv|tvrip|microhd|"
+         r"ac3|eac3|dts(?:-hd)?|truehd|atmos|aac|mp3|dd5\.?1|5\.1|7\.1|dual|multi|castellano|español|espanol|spanish|"
+         r"latino|esp|vose|subs?|subtitulado|proper|repack|internal|limited|extended|unrated|remastered|"
+         r"cap\.?\s*\d{3}|temp\.?\s*\d|temporada|season|completa)")
+RE_CORTE = re.compile(r"(?<![a-z0-9])" + CORTE + r"(?![a-z0-9áéíóúñ])|www\.", re.I)
+# «DumboM1080», «Panda1BD1080», «Canta 4K2160», «el rey leon 3D1080»: la calidad pegada al título
+RE_CALIDAD_PEGADA = re.compile(r"(?:m|bd|bdr|4k|4krip|4kremux|uhdremux|3d)\s?(?:2160|1080|720)p?(?=$|[\s.\[\]_()-])", re.I)
+RE_ANIO = re.compile(r"(?<![0-9])(19[2-9]\d|20[0-4]\d)(?![0-9])")
+RE_CORCHETES = re.compile(r"\[[^\]]*\]|\{[^}]*\}")
+RE_PARENTESIS = re.compile(r"\(([^)]*)\)")
+RE_DOMINIO = re.compile(r"(?:www\.)?[a-z0-9-]+\.(?:com|net|org|link|bz|to|tv|me|info|es)\b", re.I)
+RE_PREFIJO = re.compile(r"^(?:series?|pel[ií]culas?|peliculas?|saga|duolog[ií]a|trilog[ií]a)\s*[-:]\s*", re.I)
+RE_PEGADO = re.compile(r"(?<=[a-záéíóúñ])(?=[0-9])|(?<=[0-9])(?=[a-záéíóúñ])", re.I)
+# Carpetas que no son de verdad del catálogo: las copias que hace Plex. Ni salen ni cuentan.
+IGNORADAS = {"plex versions"}
+
+
+def calidad(texto: str) -> str | None:
+    t = texto.lower()
+    if re.search(r"2160|(?<![a-z0-9])4k|uhd", t):
+        return "4K"
+    if re.search(r"1080", t):
+        return "1080p"
+    if re.search(r"720", t):
+        return "720p"
+    return None
+
+
+def limpiar(texto: str) -> tuple[str, int | None]:
+    """Título limpio y año (si lo hay) de un nombre de archivo o carpeta de descargas."""
+    t = RE_DOMINIO.sub(" ", texto)
+    t = RE_CALIDAD_PEGADA.sub(" ", t)
+    t = RE_CORCHETES.sub(" ", t)
+    t = re.sub(r"[\[({][^\])}]*$", " ", t)  # corchete sin cerrar: «Brothers [4k 2160p][» + Cap.101
+    anio = None
+    for m in RE_PARENTESIS.finditer(t):
+        if re.fullmatch(r"\s*(19[2-9]\d|20[0-4]\d)\s*", m.group(1)):
+            anio = int(m.group(1))
+    t = RE_PARENTESIS.sub(" ", t)
+    # Separadores: puntos y guiones bajos cuando hacen de espacio (A.Bugs.Life.1998)
+    if t.count(".") >= 2 and " " not in t.strip() or "_" in t:
+        t = re.sub(r"[._]+", " ", t)
+    m = RE_CORTE.search(t)
+    if m:
+        t = t[:m.start()]
+    if anio is None:
+        anios = list(RE_ANIO.finditer(t))
+        if anios and anios[-1].start() > 0:
+            anio = int(anios[-1].group(1))
+            t = t[:anios[-1].start()]
+    t = RE_PREFIJO.sub("", t.strip())
+    t = re.sub(r"\s+", " ", t).strip(" -–_.,:")
+    t = re.sub(r",(?=\S)", ", ", t)
+    return t, anio
+
+
+def basura(titulo: str) -> bool:
+    """Nombres de archivo que no dicen nada (ComoentrenaratuDragon2, libroselva): mejor el de la carpeta."""
+    if not titulo or len(titulo) < 2:
+        return True
+    return " " not in titulo and (len(titulo) >= 9 or re.search(r"[a-zñ][A-ZÑ]", titulo) is not None)
+
+
+def basura_serie(titulo: str) -> bool:
+    """Para series vale una sola palabra (Succession, Daredevil); solo se descarta lo ilegible."""
+    if not titulo or len(titulo) < 2:
+        return True
+    return " " not in titulo and (len(titulo) >= 20 or re.search(r"[a-zñ][A-ZÑ].*\d|\d.*[a-zñ][A-ZÑ]", titulo) is not None)
+
+
+def numero_episodio(base: str, temporada_carpeta: int | None) -> tuple[int | None, int, int] | None:
+    for rx in (RE_SXXEYY, RE_NXNN):
+        m = rx.search(base)
+        if m:
+            return int(m.group(1)), int(m.group(2)), m.start()
+    m = RE_CAP.search(base)
+    if m:
+        n = m.group(1)
+        return int(n[:-2]), int(n[-2:]), m.start()
+    if temporada_carpeta is not None:
+        m = RE_EPISODIO.search(base) or RE_INICIO_NUM.match(base)
+        if m:
+            return temporada_carpeta, int(m.group(1)), m.start()
+    m = RE_ABSOLUTO.search(base)
+    if m:
+        return None, int(m.group(1)), m.start()
+    return None
+
+
+def analizar(ruta: str) -> dict | None:
+    """ruta: «carpeta/sub/archivo.mkv» relativa a su carpeta de MiCine (sin el prefijo .xxxxxxxx/).
+    Devuelve dict(tipo, titulo, anio, temporada, episodio, calidad) o None si hay que ignorarlo."""
+    partes = ruta.split("/")
+    archivo, carpetas = partes[-1], partes[:-1]
+    if any(c.lower() in IGNORADAS for c in carpetas):
+        return None
+    base = archivo.rsplit(".", 1)[0] if "." in archivo else archivo
+    temporada_carpeta = None
+    for c in reversed(carpetas):
+        m = RE_CARPETA_TEMPORADA.match(c.strip()) or RE_TEMP.search(c)
+        if m and m.groups() and m.group(1):
+            temporada_carpeta = int(m.group(1))
+            break
+    q = calidad(ruta)
+    ep = numero_episodio(base, temporada_carpeta)
+    if ep is None and carpetas:
+        # Torrents de capítulos: la carpeta lleva el «Cap.103» y el archivo no
+        ep2 = numero_episodio(carpetas[-1], temporada_carpeta)
+        if ep2 is not None and ep2[1] is not None and RE_CAP.search(carpetas[-1]) and not RE_CAP.search(carpetas[-1]).group(0).endswith("_"):
+            ep = (ep2[0], ep2[1], len(base))
+    if ep is not None:
+        temporada, episodio, pos = ep
+        if temporada is None and temporada_carpeta is not None:
+            temporada = temporada_carpeta
+        titulo, anio = limpiar(base[:pos])
+        if basura_serie(titulo):
+            titulo, anio2 = "", None
+            # Carpeta más cercana que no sea «Season 01»
+            for c in reversed(carpetas):
+                if RE_CARPETA_TEMPORADA.match(c.strip()):
+                    continue
+                t, a = limpiar(re.split(r"\s-\s(?:temp|temporada|season)", c, flags=re.I)[0])
+                if not basura_serie(t):
+                    titulo, anio2 = t, a
+                    break
+            anio = anio or anio2
+        if titulo:
+            return {"tipo": "episodio", "titulo": titulo, "anio": anio, "temporada": temporada or 1,
+                    "episodio": episodio, "calidad": q}
+    # Película: el nombre del archivo o, si no dice nada, el de su carpeta
+    titulo, anio = limpiar(base)
+    if basura(titulo) and carpetas:
+        t, a = limpiar(carpetas[-1])
+        if not basura(t):
+            titulo, anio = t, anio or a
+    if titulo and " " not in titulo:
+        titulo = re.sub(r"\s+", " ", RE_PEGADO.sub(" ", titulo)).strip()
+    return {"tipo": "pelicula", "titulo": titulo or base, "anio": anio, "temporada": None, "episodio": None, "calidad": q}
+
+
+def normalizar(texto: str) -> str:
+    """Para comparar títulos: minúsculas, sin tildes y solo letras y números separados por un espacio."""
+    t = unicodedata.normalize("NFD", texto.lower())
+    t = "".join(c for c in t if unicodedata.category(c) != "Mn")
+    return re.sub(r"[^a-z0-9]+", " ", t).strip()
+
+
+def grupo_de(a: dict) -> str:
+    """Clave estable de «la misma obra» según el nombre. Las series no llevan año: así «Brothers»
+    y «Brothers (2026)» son la misma."""
+    if a["tipo"] == "episodio":
+        return "serie|" + normalizar(a["titulo"])
+    return "pelicula|" + normalizar(a["titulo"]) + "|" + (str(a["anio"]) if a["anio"] is not None else "")
+
+
+def id_local(grupo: str) -> str:
+    """Id de obra de lo que TMDB aún no ha identificado (o de todo, si no hay clave)."""
+    return "local:" + hashlib.sha1(grupo.encode("utf-8")).hexdigest()[:12]
+
+
 # Las películas de las carpetas añadidas van como «.1a2b3c4d/…»: un nombre que empieza por punto
 # nunca es de la carpeta principal (se tratan como ocultos), así que no se pueden confundir.
 RE_OTRA_CARPETA = re.compile(r"\.([0-9a-f]{8})/(.+)", re.S)
@@ -389,13 +580,12 @@ class Raiz:
 
 
 class Biblioteca:
-    """Las carpetas de películas: la principal (donde se guardan las subidas) y las que se añadan, en
-    otros discos por ejemplo. Juntas forman un solo catálogo."""
+    """Las carpetas de películas: la principal y las que se añadan, en otros discos por ejemplo.
+    Juntas forman un solo catálogo."""
 
     def __init__(self, carpeta: Path, otras: list[Path] = ()):
         carpeta.mkdir(parents=True, exist_ok=True)
         self.carpeta = carpeta.resolve()
-        self.lock = threading.Lock()
         self.raices = [Raiz(self.carpeta)]
         for otra in otras:
             try:
@@ -446,7 +636,8 @@ class Biblioteca:
 
     def _recorrer(self, r: Raiz, peliculas: list[dict]) -> None:
         for raiz, carpetas, archivos in os.walk(r.ruta):
-            carpetas[:] = sorted(c for c in carpetas if not c.startswith("."))
+            # Las ocultas (.papelera) y las copias de Plex («Plex Versions») no son del catálogo.
+            carpetas[:] = sorted(c for c in carpetas if not c.startswith(".") and c.lower() not in IGNORADAS)
             raiz = Path(raiz)
             poster_carpeta = next(
                 (a for a in sorted(archivos) if os.path.splitext(a)[0].lower() in POSTERS_CARPETA
@@ -484,26 +675,6 @@ class Biblioteca:
                     "subtitulos": subtitulos,
                     "poster": poster,
                 })
-
-    @staticmethod
-    def nombre_seguro(nombre: str) -> str:
-        nombre = nombre.replace("\\", "/").split("/")[-1]
-        nombre = re.sub(r'[<>:"|?*\x00-\x1f]', "", nombre).strip().strip(".").strip()
-        base, ext = os.path.splitext(nombre)
-        if not base or ext.lower() not in VIDEOS.keys() | ACOMPANANTES:
-            raise ErrorPeticion("Solo se pueden subir vídeos, subtítulos (.srt, .vtt) o carátulas (.jpg, .png, .webp)")
-        if base.split(".")[0].upper() in RESERVADOS_WINDOWS:
-            base = "_" + base
-        return base[:180] + ext.lower()
-
-    def destino_libre(self, nombre: str) -> Path:
-        base, ext = os.path.splitext(nombre)
-        numero = 1
-        while True:
-            candidato = self.carpeta / (nombre if numero == 1 else f"{base} ({numero}){ext}")
-            if not candidato.exists() and not candidato.with_name(candidato.name + ".subiendo").exists():
-                return candidato
-            numero += 1
 
     def a_papelera(self, relativa: str) -> int:
         """Mueve la película (y sus subtítulos y carátula) a .papelera. No borra nada de verdad."""
@@ -714,14 +885,665 @@ class Conversor:
         return r.stdout
 
 
+# --- Identificación con TMDB (opcional: solo si hay clave «tmdb» en config.json) ---
+
+TMDB_URL = "https://api.themoviedb.org/3"
+TMDB_IMAGENES = "https://image.tmdb.org/t/p/w185"
+TMDB_PAUSA = 0.15     # segundos entre una petición y la siguiente
+TMDB_ESPERA = 600     # sin conexión: se vuelve a probar a los 10 minutos
+REVISION = 600        # cada cuánto se revisa el catálogo por si hay algo nuevo que identificar
+RE_OBRA_TMDB = re.compile(r"(movie|tv):([1-9]\d{0,9})")
+
+
+class ErrorTmdb(Exception):
+    """TMDB no contesta (código 0) o contesta con un error HTTP."""
+
+    def __init__(self, codigo: int):
+        super().__init__(f"TMDB: {codigo or 'sin conexión'}")
+        self.codigo = codigo
+
+
+def anio_de(fecha) -> int | None:
+    """'1999-03-30' -> 1999."""
+    m = re.match(r"(\d{4})", fecha) if isinstance(fecha, str) else None
+    return int(m.group(1)) if m and int(m.group(1)) > 0 else None
+
+
+def clave_tmdb(config: dict) -> str:
+    clave = config.get("tmdb")
+    return clave.strip() if isinstance(clave, str) else ""
+
+
+class Tmdb:
+    """Pregunta a TMDB qué película o serie es cada grupo de vídeos y lo apunta en datos/tmdb.json
+    (lo comparte con MiCine.exe). Un trabajador en segundo plano hace las peticiones de una en una;
+    al listar el catálogo no se espera nunca a TMDB: se usa lo que ya se sabe y lo demás se encola."""
+
+    def __init__(self, clave: str):
+        self.clave = clave
+        self.base = (os.environ.get("MICINE_TMDB_URL") or TMDB_URL).rstrip("/")
+        self.ruta = DATOS / "tmdb.json"
+        self.lock = threading.Condition()  # con RLock: se puede volver a coger desde el mismo hilo
+        self.datos = self._cargar()
+        # Tareas pendientes: (tipo, …) -> datos. Los detalles y las temporadas van antes que las búsquedas.
+        self.urgentes: OrderedDict = OrderedDict()
+        self.cola: OrderedDict = OrderedDict()
+        self.estado: str | None = None
+        self.parado = False         # la clave no vale: no se pregunta más hasta «Volver a identificar»
+        self.fallidas: set = set()  # obras que TMDB no conoce: no se piden más en esta sesión
+        self.sin_guardar = False
+        self.guardado = 0.0
+        self.reintento = 0.0        # sin conexión: no se vuelve a probar hasta este momento
+        self.lock_red = threading.Lock()
+        self.ultima = 0.0
+        threading.Thread(target=self._trabajar, daemon=True).start()
+
+    def _cargar(self) -> dict:
+        datos = {"version": 1, "busquedas": {}, "obras": {}, "manual": {}}
+        try:
+            leido = leer_json(self.ruta, {})
+        except (OSError, ValueError):
+            registrar("No se pudo leer datos/tmdb.json: se vuelve a identificar todo")
+            leido = {}
+        for campo, valor in (leido.items() if isinstance(leido, dict) else ()):
+            if campo in ("busquedas", "obras", "manual"):
+                if isinstance(valor, dict):
+                    datos[campo] = valor
+            elif campo != "version":
+                datos[campo] = valor  # lo que añada otra versión de MiCine se conserva al guardar
+        return datos
+
+    def guardar(self) -> None:
+        with self.lock:
+            try:
+                escribir_json(self.ruta, self.datos)
+            except OSError as error:
+                registrar(f"No se pudo guardar datos/tmdb.json: {error}")
+                return
+            self.sin_guardar = False
+            self.guardado = time.monotonic()
+
+    # --- lo que ya se sabe (llamar con self.lock cogido) ---
+
+    def obra_de(self, grupo: str) -> str | None:
+        """Lo manual manda sobre la búsqueda automática."""
+        manual = self.datos["manual"].get(grupo)
+        if isinstance(manual, str) and RE_OBRA_TMDB.fullmatch(manual):
+            return manual
+        busqueda = self.datos["busquedas"].get(grupo)
+        obra = busqueda.get("obra") if isinstance(busqueda, dict) else None
+        return obra if isinstance(obra, str) and RE_OBRA_TMDB.fullmatch(obra) else None
+
+    def buscado(self, grupo: str) -> bool:
+        return isinstance(self.datos["busquedas"].get(grupo), dict) or isinstance(self.datos["manual"].get(grupo), str)
+
+    def detalle(self, obra: str) -> dict | None:
+        detalle = self.datos["obras"].get(obra)
+        return detalle if isinstance(detalle, dict) and isinstance(detalle.get("titulo"), str) else None
+
+    def pendientes(self) -> int:
+        return len(self.urgentes) + len(self.cola)
+
+    # --- encolar (llamar con self.lock cogido) ---
+
+    def encolar_busqueda(self, grupo: str, tipo: str, titulo: str, anio: int | None, temporadas: set) -> None:
+        tarea = ("buscar", grupo)
+        if tarea in self.cola:
+            self.cola[tarea]["temporadas"] |= temporadas
+        else:
+            self.cola[tarea] = {"tipo": tipo, "titulo": titulo, "anio": anio, "temporadas": set(temporadas)}
+            self.lock.notify_all()
+
+    def encolar_obra(self, obra: str, temporadas: set) -> None:
+        if obra in self.fallidas:
+            return
+        tarea = ("obra", obra)
+        if tarea in self.urgentes:
+            self.urgentes[tarea]["temporadas"] |= temporadas
+        else:
+            self.urgentes[tarea] = {"temporadas": set(temporadas)}
+            self.lock.notify_all()
+
+    def encolar_temporada(self, obra: str, numero: int) -> None:
+        tarea = ("temporada", obra, numero)
+        if tarea not in self.urgentes:
+            self.urgentes[tarea] = {}
+            self.lock.notify_all()
+
+    def encolar_temporadas(self, obra: str, detalle: dict, temporadas: set) -> None:
+        """Los nombres de episodio de las temporadas que hay en las carpetas y aún no se tienen."""
+        if not obra.startswith("tv:"):
+            return
+        hechas = detalle.get("temporadas") if isinstance(detalle.get("temporadas"), dict) else {}
+        for numero in sorted(temporadas):
+            if str(numero) not in hechas:
+                self.encolar_temporada(obra, numero)
+
+    # --- el trabajador ---
+
+    def _trabajar(self) -> None:
+        while True:
+            with self.lock:
+                while True:
+                    espera = self.reintento - time.monotonic()
+                    if self.clave and not self.parado and (self.urgentes or self.cola) and espera <= 0:
+                        break
+                    if self.sin_guardar:
+                        self.guardar()
+                    self.lock.wait(espera if espera > 0 else None)
+                cola = self.urgentes if self.urgentes else self.cola
+                tarea, datos = next(iter(cola.items()))
+            try:
+                self._hacer(tarea, datos)
+            except ErrorTmdb as error:
+                if error.codigo == 401:
+                    with self.lock:
+                        if not self.parado:
+                            registrar("TMDB dice que la clave no es válida: revisa «tmdb» en config.json")
+                        self.estado, self.parado = "La clave de TMDB no es válida", True
+                    continue  # la tarea se queda en la cola
+                if error.codigo in (0, 429) or error.codigo >= 500:
+                    with self.lock:
+                        if self.estado != "Sin conexión con TMDB":
+                            registrar("Sin conexión con TMDB: se volverá a probar dentro de 10 minutos")
+                        self.estado = "Sin conexión con TMDB"
+                        self.reintento = time.monotonic() + TMDB_ESPERA
+                    continue  # la tarea se queda en la cola
+                self._sin_resultado(tarea)  # 404 y parecidos: TMDB no lo tiene
+            except Exception:
+                traceback.print_exc()
+            with self.lock:
+                cola.pop(tarea, None)
+                if self.estado == "Sin conexión con TMDB":
+                    self.estado = None
+                # Mientras identifica se guarda cada pocos segundos, no tras cada petición.
+                if self.sin_guardar and (time.monotonic() - self.guardado > 5 or not (self.urgentes or self.cola)):
+                    self.guardar()
+
+    def _hacer(self, tarea: tuple, datos: dict) -> None:
+        if tarea[0] == "buscar":
+            obra = self._buscar(datos["tipo"], datos["titulo"], datos["anio"])
+            with self.lock:
+                self.datos["busquedas"][tarea[1]] = {"obra": obra, "fecha": int(time.time())}
+                self.sin_guardar = True
+                if obra:
+                    detalle = self.detalle(obra)
+                    if detalle is None:
+                        self.encolar_obra(obra, datos["temporadas"])
+                    else:
+                        self.encolar_temporadas(obra, detalle, datos["temporadas"])
+        elif tarea[0] == "obra":
+            obra = tarea[1]
+            detalle = self._detalle(obra)
+            with self.lock:
+                anterior = self.datos["obras"].get(obra)
+                if detalle["tipo"] == "serie":
+                    temporadas = anterior.get("temporadas") if isinstance(anterior, dict) else None
+                    detalle["temporadas"] = temporadas if isinstance(temporadas, dict) else {}
+                self.datos["obras"][obra] = detalle
+                self.sin_guardar = True
+                self.encolar_temporadas(obra, detalle, datos["temporadas"])
+        else:
+            _, obra, numero = tarea
+            try:
+                respuesta = self._pedir(f"/tv/{obra.split(':')[1]}/season/{numero}")
+            except ErrorTmdb as error:
+                if error.codigo != 404:
+                    raise
+                respuesta = {}  # esa temporada no está en TMDB: se apunta vacía y no se vuelve a pedir
+            nombres = {}
+            for episodio in respuesta.get("episodes") or []:
+                if isinstance(episodio, dict) and isinstance(episodio.get("episode_number"), int) \
+                        and isinstance(episodio.get("name"), str) and episodio["name"].strip():
+                    nombres[str(episodio["episode_number"])] = episodio["name"].strip()
+            self._apuntar_temporada(obra, numero, nombres)
+
+    def _apuntar_temporada(self, obra: str, numero: int, nombres: dict) -> None:
+        with self.lock:
+            detalle = self.detalle(obra)
+            if detalle is not None:
+                if not isinstance(detalle.get("temporadas"), dict):
+                    detalle["temporadas"] = {}
+                detalle["temporadas"][str(numero)] = nombres
+                self.sin_guardar = True
+
+    def _sin_resultado(self, tarea: tuple) -> None:
+        with self.lock:
+            if tarea[0] == "buscar":
+                self.datos["busquedas"][tarea[1]] = {"obra": None, "fecha": int(time.time())}
+                self.sin_guardar = True
+            elif tarea[0] == "obra":
+                self.fallidas.add(tarea[1])
+        if tarea[0] == "temporada":
+            self._apuntar_temporada(tarea[1], tarea[2], {})
+
+    # --- peticiones a TMDB ---
+
+    def _pedir(self, ruta: str, parametros: dict | None = None) -> dict:
+        """GET a TMDB, de una en una y con una pequeña pausa entre ellas (TMDB limita las peticiones)."""
+        consulta = {**(parametros or {}), "language": "es-ES"}
+        cabeceras = {"Accept": "application/json", "User-Agent": "MiCine"}
+        if self.clave.count(".") >= 2 and len(self.clave) > 100:
+            cabeceras["Authorization"] = f"Bearer {self.clave}"  # token de lectura (v4): «eyJ…»
+        else:
+            consulta["api_key"] = self.clave
+        peticion = urllib.request.Request(f"{self.base}{ruta}?{urllib.parse.urlencode(consulta)}", headers=cabeceras)
+        with self.lock_red:
+            espera = self.ultima + TMDB_PAUSA - time.monotonic()
+            if espera > 0:
+                time.sleep(espera)
+            try:
+                with urllib.request.urlopen(peticion, timeout=15) as respuesta:
+                    datos = json.loads(respuesta.read())
+            except urllib.error.HTTPError as error:
+                error.close()
+                raise ErrorTmdb(error.code)
+            except (OSError, ValueError, http.client.HTTPException):
+                raise ErrorTmdb(0)
+            finally:
+                self.ultima = time.monotonic()
+        return datos if isinstance(datos, dict) else {}
+
+    def _resultados(self, ruta: str, parametros: dict) -> list[dict]:
+        resultados = self._pedir(ruta, parametros).get("results")
+        return [r for r in resultados if isinstance(r, dict)] if isinstance(resultados, list) else []
+
+    def _buscar(self, tipo: str, titulo: str, anio: int | None) -> str | None:
+        """La obra del primer resultado; si con el año no sale nada, se prueba sin él."""
+        if tipo == "pelicula":
+            ruta, campo_anio, prefijo = "/search/movie", "year", "movie"
+        else:
+            ruta, campo_anio, prefijo = "/search/tv", "first_air_date_year", "tv"
+        parametros = {"query": titulo, "include_adult": "false"}
+        resultados = self._resultados(ruta, {**parametros, campo_anio: anio} if anio else parametros)
+        if not resultados and anio:
+            resultados = self._resultados(ruta, parametros)
+        numero = resultados[0].get("id") if resultados else None
+        return f"{prefijo}:{numero}" if isinstance(numero, int) and not isinstance(numero, bool) and numero > 0 else None
+
+    def _detalle(self, obra: str) -> dict:
+        tipo, numero = obra.split(":")
+        d = self._pedir(f"/{tipo}/{numero}")
+        pelicula = tipo == "movie"
+        generos = {g.get("id") for g in d.get("genres") or [] if isinstance(g, dict)}
+        titulo = d.get("title" if pelicula else "name") or d.get("original_title" if pelicula else "original_name")
+        sinopsis = d.get("overview")
+        return {
+            "tipo": "pelicula" if pelicula else "serie",
+            "titulo": titulo.strip() if isinstance(titulo, str) and titulo.strip() else obra,
+            "anio": anio_de(d.get("release_date" if pelicula else "first_air_date")),
+            "sinopsis": sinopsis.strip() if isinstance(sinopsis, str) and sinopsis.strip() else None,
+            "anime": 16 in generos and d.get("original_language") == "ja",
+        }
+
+    # --- lo que piden los administradores ---
+
+    def buscar(self, texto: str, tipo: str) -> list[dict]:
+        """El buscador de «Identificar…»: hasta 10 resultados."""
+        pelicula = tipo == "pelicula"
+        try:
+            respuesta = self._resultados("/search/movie" if pelicula else "/search/tv",
+                                         {"query": texto, "include_adult": "false"})
+        except ErrorTmdb as error:
+            if error.codigo == 401:
+                raise ErrorPeticion("La clave de TMDB no es válida", 502)
+            raise ErrorPeticion("Sin conexión con TMDB", 502)
+        resultados = []
+        for r in respuesta:
+            numero = r.get("id")
+            if not isinstance(numero, int) or isinstance(numero, bool) or numero <= 0:
+                continue
+            titulo = r.get("title" if pelicula else "name") or r.get("original_title" if pelicula else "original_name")
+            sinopsis, imagen = r.get("overview"), r.get("poster_path")
+            resultados.append({
+                "obra": f"{'movie' if pelicula else 'tv'}:{numero}",
+                "titulo": titulo if isinstance(titulo, str) else "",
+                "anio": anio_de(r.get("release_date" if pelicula else "first_air_date")),
+                "sinopsis": sinopsis.strip() if isinstance(sinopsis, str) and sinopsis.strip() else None,
+                "imagen": TMDB_IMAGENES + imagen if isinstance(imagen, str) and imagen.startswith("/") else None,
+            })
+            if len(resultados) == 10:
+                break
+        return resultados
+
+    def identificar(self, grupo: str, obra: str | None) -> None:
+        """Identificación a mano de un grupo (obra None la quita y vuelve a mandar la búsqueda)."""
+        with self.lock:
+            if obra:
+                self.datos["manual"][grupo] = obra
+                self.fallidas.discard(obra)
+                if self.detalle(obra) is None:
+                    self.encolar_obra(obra, set())
+            else:
+                self.datos["manual"].pop(grupo, None)
+            self.guardar()
+
+    def volver_a_identificar(self, clave: str) -> None:
+        """Olvida lo que no se encontró para que se vuelva a buscar (y lo que falló por la clave o la red)."""
+        with self.lock:
+            self.clave = clave
+            busquedas = self.datos["busquedas"]
+            self.datos["busquedas"] = {g: b for g, b in busquedas.items()
+                                       if isinstance(b, dict) and isinstance(b.get("obra"), str)}
+            self.fallidas.clear()
+            self.parado, self.estado, self.reintento = False, None, 0.0
+            self.guardar()
+            self.lock.notify_all()
+
+
+# --- Carátulas sacadas del propio vídeo (solo si está FFmpeg) ---
+
+RE_CARATULA = re.compile(r"([0-9a-f]{20})\.(jpg|fallo)")
+MOMENTOS_CARATULA = (0.20, 0.35, 0.50, 0.10, 0.65)  # partes de la duración que se prueban, en orden
+# El fotograma a lo ancho sobre el mismo fotograma ampliado y desenfocado: una carátula vertical 2:3.
+# Aparte sale el mismo fotograma en 16×16 grises, para ver si es casi negro o plano.
+FILTRO_CARATULA = (
+    "[0:v:0]yadif=deint=interlaced,scale=trunc(iw*sar/2)*2:ih,setsar=1,thumbnail=40,split=3[a][b][c];"
+    "[a]scale=400:600:force_original_aspect_ratio=increase,crop=400:600,boxblur=18:3,eq=brightness=-0.12[fondo];"
+    "[b]scale=400:-2[frente];[fondo][frente]overlay=0:(H-h)/2,format=yuvj420p[img];[c]scale=16:16,format=gray[g]"
+)
+
+
+def clave_caratula(ruta: str, tamano: int) -> str:
+    """Nombre de la carátula de un vídeo: cambia si el archivo cambia de sitio o de tamaño."""
+    return hashlib.sha1(f"{ruta}|{tamano}".encode("utf-8")).hexdigest()[:20]
+
+
+def fotograma_bueno(grises: bytes) -> bool:
+    """Un fotograma casi negro o plano (fundidos, rótulos) no sirve de carátula."""
+    if len(grises) < 256:
+        return True  # no se puede saber: vale
+    muestra = grises[:256]
+    media = sum(muestra) / 256
+    desviacion = math.sqrt(sum((x - media) ** 2 for x in muestra) / 256)
+    return media >= 20 and desviacion >= 8
+
+
+class Caratulas:
+    """Para los vídeos sin imagen propia: un fotograma del propio vídeo, hecho una sola vez en segundo
+    plano (de uno en uno y con prioridad baja) y guardado en datos/caratulas/<clave>.jpg."""
+
+    def __init__(self, conversor: Conversor, biblioteca: Biblioteca):
+        self.conversor, self.biblioteca = conversor, biblioteca
+        self.carpeta = DATOS / "caratulas"
+        self.carpeta.mkdir(parents=True, exist_ok=True)
+        for resto in self.carpeta.glob("*.tmp.jpg"):  # de una vez que se cerró MiCine a medias
+            try:
+                resto.unlink()
+            except OSError:
+                pass
+        self.lock = threading.Condition()
+        self.cola: OrderedDict = OrderedDict()  # clave -> ruta del vídeo
+        self.actual: tuple[str, int] | None = None  # (clave, generación) de la que se está haciendo
+        self.generacion = 0  # sube con «Actualizar carátulas»: lo que se estuviera haciendo se descarta
+        threading.Thread(target=self._trabajar, daemon=True).start()
+
+    def hechas(self) -> tuple[dict, set]:
+        """Las carátulas que ya hay (clave -> fecha, que va en el enlace) y las que no se pudieron hacer."""
+        hechas, fallos = {}, set()
+        try:
+            with os.scandir(self.carpeta) as entradas:
+                for entrada in entradas:
+                    m = RE_CARATULA.fullmatch(entrada.name)
+                    if m and m.group(2) == "jpg":
+                        hechas[m.group(1)] = int(entrada.stat().st_mtime)
+                    elif m:
+                        fallos.add(m.group(1))
+        except OSError:
+            pass
+        return hechas, fallos
+
+    def encolar(self, nuevas: dict) -> None:
+        with self.lock:
+            for clave, ruta in nuevas.items():
+                if clave not in self.cola and self.actual != (clave, self.generacion):
+                    self.cola[clave] = ruta
+            if self.cola:
+                self.lock.notify_all()
+
+    def pendientes(self) -> int:
+        with self.lock:
+            return len(self.cola) + (self.actual is not None and self.actual[1] == self.generacion)
+
+    def rehacer(self) -> None:
+        """«Actualizar carátulas»: borra las hechas y los fallos (luego se encolan todas otra vez)."""
+        with self.lock:
+            self.generacion += 1
+            self.cola.clear()
+            for archivo in self.carpeta.iterdir():
+                if RE_CARATULA.fullmatch(archivo.name):
+                    try:
+                        archivo.unlink()
+                    except OSError:
+                        pass  # alguien la está viendo justo ahora: se sobrescribirá al rehacerla
+
+    def _trabajar(self) -> None:
+        while True:
+            with self.lock:
+                while not self.cola:
+                    self.lock.wait()
+                clave, ruta = self.cola.popitem(last=False)
+                generacion = self.generacion
+                self.actual = (clave, generacion)
+            try:
+                self._hacer(clave, ruta, generacion)
+            except Exception:
+                traceback.print_exc()
+            finally:
+                with self.lock:
+                    self.actual = None
+
+    def _hacer(self, clave: str, relativa: str, generacion: int) -> None:
+        archivo = self.biblioteca.resolver(relativa)
+        try:
+            duracion = self.conversor.info(archivo)["duracion"] if archivo else None
+        except OSError:
+            duracion = None
+        if duracion is None:
+            return  # lo han borrado o movido mientras esperaba
+        # Duración desconocida: el segundo 60 y, si no hay imagen (dura menos), el principio.
+        momentos = [duracion * parte for parte in MOMENTOS_CARATULA] if duracion > 0 else [60.0, 0.0]
+        hecha = None
+        for numero, segundo in enumerate(momentos):
+            temporal = self.carpeta / f"{clave}.{numero}.tmp.jpg"
+            try:
+                grises = self._fotograma(archivo, segundo, temporal)
+            except subprocess.TimeoutExpired:
+                break
+            if grises is None:
+                continue
+            if hecha:
+                hecha.unlink(missing_ok=True)
+            hecha = temporal  # si ninguno vale, se queda el último
+            if duracion <= 0 or fotograma_bueno(grises):
+                break
+        with self.lock:
+            if generacion != self.generacion:  # «Actualizar carátulas» mientras tanto: se hará de nuevo
+                if hecha:
+                    hecha.unlink(missing_ok=True)
+                return
+            try:
+                if hecha:
+                    os.replace(hecha, self.carpeta / f"{clave}.jpg")
+                else:
+                    (self.carpeta / f"{clave}.fallo").write_bytes(b"")
+                    registrar(f"No se pudo sacar una carátula de «{archivo.name}»")
+            except OSError as error:
+                registrar(f"No se pudo guardar la carátula de «{archivo.name}»: {error}")
+                if hecha:
+                    hecha.unlink(missing_ok=True)
+
+    def _fotograma(self, archivo: Path, segundo: float, destino: Path) -> bytes | None:
+        """Saca el fotograma a destino y devuelve su muestra de 16×16 grises (None si no sale imagen)."""
+        args = [self.conversor.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
+                "-ss", f"{segundo:.3f}", "-i", "file:" + str(archivo), "-filter_complex", FILTRO_CARATULA,
+                "-map", "[img]", "-frames:v", "1", "-q:v", "3", "-update", "1", "-y", str(destino),
+                "-map", "[g]", "-frames:v", "1", "-f", "rawvideo", "pipe:1"]
+        try:
+            r = subprocess.run(args, capture_output=True, timeout=120, **Conversor._opciones())
+        except subprocess.TimeoutExpired:
+            destino.unlink(missing_ok=True)
+            raise
+        except OSError:
+            return None
+        if r.returncode != 0 or not destino.is_file() or destino.stat().st_size == 0:
+            destino.unlink(missing_ok=True)
+            return None
+        return r.stdout
+
+
+# --- El catálogo por secciones: Películas, Series, Anime y MiCine (lo que falta por identificar) ---
+
+SECCIONES = (("peliculas", "Películas"), ("series", "Series"), ("anime", "Anime"), ("micine", "MiCine"))
+
+
+class Catalogo:
+    """Reconoce cada vídeo por su nombre, lo junta con los demás de la misma obra (versiones de una
+    película, episodios de una serie) y lo clasifica con lo que se sepa de TMDB. No espera a nadie:
+    lo que falte (búsquedas, detalles, temporadas, carátulas) se encola para hacerlo en segundo plano."""
+
+    def __init__(self, biblioteca: Biblioteca, tmdb: Tmdb, caratulas: Caratulas | None):
+        self.biblioteca, self.tmdb, self.caratulas = biblioteca, tmdb, caratulas
+
+    def revisar(self) -> None:
+        """Encola lo que falte de todo el catálogo (al arrancar, cada 10 minutos y al pedirlo)."""
+        self.preparar(self.biblioteca.listar())
+
+    def preparar(self, peliculas: list[dict]) -> tuple[list[dict], dict, dict]:
+        """Añade a cada vídeo su sección, obra, temporada, episodio… Devuelve los vídeos (en orden: obra,
+        temporada, episodio), las obras y un resumen. Cada vídeo lleva «_caratula» (clave, fecha) o None."""
+        con_clave = bool(self.tmdb.clave)
+        videos, grupos = [], {}
+        for p in peliculas:
+            otra = RE_OTRA_CARPETA.fullmatch(p["ruta"])
+            a = analizar(otra.group(2) if otra else p["ruta"])
+            if a is None:
+                continue
+            grupo = grupo_de(a)
+            videos.append((p, a, grupo))
+            grupos.setdefault(grupo, []).append((p, a))
+
+        obras, de_grupo = {}, {}
+        with self.tmdb.lock:
+            for grupo, miembros in grupos.items():
+                miembros.sort(key=lambda m: (m[1]["temporada"] or 0, m[1]["episodio"] or 0, m[0]["ruta"]))
+                serie = grupo.startswith("serie|")
+                titulo = miembros[0][1]["titulo"]
+                if serie:
+                    # El año de una serie: el más repetido entre sus episodios (si empatan, el menor).
+                    anios = Counter(a["anio"] for _, a in miembros if a["anio"] is not None)
+                    anio = min(anios, key=lambda x: (-anios[x], x)) if anios else None
+                else:
+                    anio = miembros[0][1]["anio"]
+                temporadas = {a["temporada"] for _, a in miembros if a["tipo"] == "episodio"}
+                obra = detalle = None
+                if con_clave:  # sin clave no se usa TMDB para nada: todo va por el nombre
+                    obra = self.tmdb.obra_de(grupo)
+                    if obra is None:
+                        if not self.tmdb.buscado(grupo):
+                            self.tmdb.encolar_busqueda(grupo, "serie" if serie else "pelicula", titulo, anio, temporadas)
+                    else:
+                        detalle = self.tmdb.detalle(obra)
+                        if detalle is None:
+                            self.tmdb.encolar_obra(obra, temporadas)
+                        else:
+                            self.tmdb.encolar_temporadas(obra, detalle, temporadas)
+                if detalle is not None:
+                    if obra not in obras:
+                        tipo = "pelicula" if obra.startswith("movie:") else "serie"
+                        anime = detalle.get("anime") is True
+                        sinopsis = detalle.get("sinopsis")
+                        obras[obra] = {
+                            "id": obra, "tipo": tipo, "titulo": detalle["titulo"],
+                            "anio": detalle.get("anio") if isinstance(detalle.get("anio"), int) else None,
+                            "sinopsis": sinopsis if isinstance(sinopsis, str) and sinopsis else None,
+                            "anime": anime, "seccion": "anime" if anime else "peliculas" if tipo == "pelicula" else "series",
+                            "identificada": True, "poster": None,
+                        }
+                    nombres = detalle.get("temporadas") if isinstance(detalle.get("temporadas"), dict) else {}
+                    de_grupo[grupo] = (obra, nombres)
+                else:
+                    local = id_local(grupo)
+                    obras[local] = {
+                        "id": local, "tipo": "serie" if serie else "pelicula", "titulo": titulo, "anio": anio,
+                        "sinopsis": None, "anime": False,
+                        "seccion": "micine" if con_clave else "series" if serie else "peliculas",
+                        "identificada": False, "poster": None,
+                    }
+                    de_grupo[grupo] = (local, {})
+
+        hechas, fallos = self.caratulas.hechas() if self.caratulas else ({}, set())
+        nuevas = {}
+        for p, a, grupo in videos:
+            obra_id, nombres = de_grupo[grupo]
+            obra = obras[obra_id]
+            nombre = None
+            if obra["tipo"] == "serie" and a["tipo"] == "episodio":
+                temporada = nombres.get(str(a["temporada"]))
+                nombre = temporada.get(str(a["episodio"])) if isinstance(temporada, dict) else None
+                nombre = nombre if isinstance(nombre, str) and nombre else None
+                titulo = f"{obra['titulo']} · T{a['temporada']}·E{a['episodio']}" + (f" · {nombre}" if nombre else "")
+            else:
+                titulo = f"{obra['titulo']} ({obra['anio']})" if obra["anio"] else obra["titulo"]
+            p.update(titulo=titulo, seccion=obra["seccion"], obra=obra_id, temporada=a["temporada"],
+                     episodio=a["episodio"], nombre_episodio=nombre, version=a["calidad"], grupo=grupo,
+                     _caratula=None)
+            if p["poster"] is None and self.caratulas:
+                clave = clave_caratula(p["ruta"], p["tamano"])
+                if clave in hechas:
+                    p["_caratula"] = (clave, hechas[clave])
+                elif clave not in fallos:
+                    nuevas[clave] = p["ruta"]
+        if nuevas:
+            self.caratulas.encolar(nuevas)
+
+        # Orden: por obra (título, año) y dentro de ella temporada, episodio y ruta (las versiones).
+        lista = [p for p, _, _ in videos]
+        lista.sort(key=lambda p: (obras[p["obra"]]["titulo"].casefold(), obras[p["obra"]]["anio"] or 0, p["obra"],
+                                  p["temporada"] or 0, p["episodio"] or 0, p["ruta"]))
+        resumen = {
+            "secciones": [{"id": s, "titulo": t} for s, t in SECCIONES if any(o["seccion"] == s for o in obras.values())],
+            "videos": len(lista),
+            "identificados": sum(1 for p in lista if obras[p["obra"]]["identificada"]),
+            "en_micine": sum(1 for p in lista if p["seccion"] == "micine"),
+        }
+        return lista, obras, resumen
+
+    def identificacion(self, resumen: dict) -> dict:
+        tmdb = self.tmdb
+        with tmdb.lock:
+            clave, pendientes, estado = bool(tmdb.clave), tmdb.pendientes(), tmdb.estado
+        if not clave:
+            estado = "Sin clave: clasificado por el nombre del archivo"
+        elif not estado and pendientes:
+            estado = f"Identificando con TMDB: quedan {pendientes}"
+        elif not estado:
+            estado = f"Identificadas {resumen['identificados']} de {resumen['videos']}"
+            if resumen["en_micine"]:
+                estado += f" · {resumen['en_micine']} en MiCine"
+        return {"tmdb": clave, "pendientes": pendientes, "estado": estado}
+
+
+def revisar_cada_rato(catalogo: Catalogo) -> None:
+    """Al arrancar y cada 10 minutos: lo nuevo que haya en las carpetas se identifica y tiene carátula."""
+    while True:
+        try:
+            catalogo.revisar()
+        except Exception:
+            traceback.print_exc()
+        time.sleep(REVISION)
+
+
 class ServidorMiCine(ThreadingHTTPServer):
     # En Windows, SO_REUSEADDR dejaría abrir dos MiCine en el mismo puerto sin avisar.
     allow_reuse_address = os.name != "nt"
     daemon_threads = True
 
     def __init__(self, direccion, config: dict, almacen: Almacen, biblioteca: Biblioteca,
-                 conversor: Conversor | None = None):
+                 conversor: Conversor | None = None, catalogo: Catalogo | None = None):
         self.config, self.almacen, self.biblioteca, self.conversor = config, almacen, biblioteca, conversor
+        self.catalogo = catalogo or Catalogo(biblioteca, Tmdb(clave_tmdb(config)),
+                                             Caratulas(conversor, biblioteca) if conversor else None)
         self.limitador = Limitador()
         super().__init__(direccion, Manejador)
 
@@ -733,8 +1555,11 @@ RUTAS = {
     ("POST", "/api/logout"): ("api_logout", False),
     ("POST", "/api/progreso"): ("api_progreso", False),
     ("POST", "/api/cuenta/contrasena"): ("api_mi_contrasena", False),
-    ("POST", "/api/subir"): ("api_subir", True),
     ("POST", "/api/peliculas/borrar"): ("api_borrar_pelicula", True),
+    ("GET", "/api/identificar/buscar"): ("api_identificar_buscar", True),
+    ("POST", "/api/identificar"): ("api_identificar", True),
+    ("POST", "/api/identificar/actualizar"): ("api_identificar_actualizar", True),
+    ("POST", "/api/caratulas/actualizar"): ("api_caratulas_actualizar", True),
     ("GET", "/api/usuarios"): ("api_usuarios", True),
     ("POST", "/api/usuarios/crear"): ("api_crear_usuario", True),
     ("POST", "/api/usuarios/borrar"): ("api_borrar_usuario", True),
@@ -754,7 +1579,7 @@ CABECERAS_PROXY = ("CF-Connecting-IP", "X-Forwarded-For", "X-Forwarded-Proto", "
 
 
 def es_ruta_de_apps(ruta: str) -> bool:
-    return ruta in RUTAS_APPS or ruta.startswith("/media/")
+    return ruta in RUTAS_APPS or ruta.startswith(("/media/", "/caratula/"))
 
 
 class Manejador(BaseHTTPRequestHandler):
@@ -813,6 +1638,8 @@ class Manejador(BaseHTTPRequestHandler):
                     if not (self.usuario_actual() or self.server.almacen.usuario_de_enlace(relativa, self.consulta)):
                         raise ErrorPeticion("Inicia sesión para continuar", 401)
                     return self.servir_media(relativa)
+                if ruta.startswith("/caratula/"):
+                    return self.servir_caratula(urllib.parse.unquote(ruta[len("/caratula/"):]))
             else:
                 # Cabecera propia obligatoria: otra web no puede añadirla sin permiso (protección CSRF).
                 if self.headers.get("X-MiCine") != "1":
@@ -1025,6 +1852,17 @@ class Manejador(BaseHTTPRequestHandler):
                                      cabeceras={"Cache-Control": "private, max-age=3600"})
         raise ErrorPeticion("No encontrado", 404)
 
+    def servir_caratula(self, nombre: str) -> None:
+        """Carátula sacada del vídeo. Va firmada como los enlaces de /media/ (la tele no envía galletas)."""
+        m = re.fullmatch(r"([0-9a-f]{20})\.jpg", nombre)
+        clave = m.group(1) if m else nombre
+        if not (self.usuario_actual() or self.server.almacen.usuario_de_enlace("caratula:" + clave, self.consulta)):
+            raise ErrorPeticion("Inicia sesión para continuar", 401)
+        archivo = DATOS / "caratulas" / f"{clave}.jpg"
+        if not m or not archivo.is_file():
+            raise ErrorPeticion("No encontrado", 404)
+        self.enviar_archivo(archivo, "image/jpeg")
+
     def galleta(self, token: str, segundos: int) -> dict:
         return {"Set-Cookie": f"{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={segundos}"}
 
@@ -1086,26 +1924,35 @@ class Manejador(BaseHTTPRequestHandler):
         self.enviar_json({"ok": True}, cabeceras=self.galleta("", 0))
 
     def api_peliculas(self, usuario: str) -> None:
-        almacen, biblioteca = self.server.almacen, self.server.biblioteca
+        almacen, biblioteca, catalogo = self.server.almacen, self.server.biblioteca, self.server.catalogo
         progreso = almacen.progreso_de(usuario)
-        peliculas = biblioteca.listar()
+        peliculas, obras, resumen = catalogo.preparar(biblioteca.listar())
         for p in peliculas:
+            caratula = p.pop("_caratula")
             p["progreso"] = progreso.get(p["ruta"])
             p["url"] = almacen.enlace(usuario, p["ruta"])
-            p["poster"] = almacen.enlace(usuario, p["poster"]) if p["poster"] else None
+            # Su imagen propia; si no tiene, el fotograma del vídeo si ya está hecho.
+            if p["poster"]:
+                p["poster"] = almacen.enlace(usuario, p["poster"])
+            elif caratula:
+                p["poster"] = almacen.enlace_caratula(usuario, *caratula)
             for s in p["subtitulos"]:
                 s["url"] = almacen.enlace(usuario, s["ruta"])
+        # La carátula de la obra: la del primer vídeo que tenga (los episodios van en orden).
+        for p in peliculas:
+            if obras[p["obra"]]["poster"] is None:
+                obras[p["obra"]]["poster"] = p["poster"]
         # La dirección de este ordenador en la red de casa: la que hay que escribir en la tele.
         host, puerto = self.server.server_address[:2]
         ip = ip_en_red() if host in ("0.0.0.0", "") else None
-        datos = {"peliculas": peliculas, "conversion": self.server.conversor is not None,
-                 "red": f"http://{ip}:{puerto}" if ip else None}
+        datos = {
+            "peliculas": peliculas, "obras": obras, "secciones": resumen["secciones"],
+            "identificacion": catalogo.identificacion(resumen),
+            "caratulas": {"pendientes": catalogo.caratulas.pendientes() if catalogo.caratulas else 0},
+            "conversion": self.server.conversor is not None, "red": f"http://{ip}:{puerto}" if ip else None,
+        }
         if almacen.rol(usuario) == "admin":
-            datos.update(
-                carpeta=str(biblioteca.carpeta),
-                libre=shutil.disk_usage(biblioteca.carpeta).free,
-                limite=int(self.server.config["limite_subida_gb"] * 1024 ** 3),
-            )
+            datos["carpeta"] = str(biblioteca.carpeta)
         self.enviar_json(datos)
 
     def api_info(self, usuario: str) -> None:
@@ -1135,55 +1982,66 @@ class Manejador(BaseHTTPRequestHandler):
         almacen.cerrar_sesiones_de(usuario, salvo_token=self.token())
         self.enviar_json({"ok": True})
 
-    def api_subir(self, usuario: str) -> None:
-        """El navegador envía el archivo tal cual en el cuerpo; se escribe a disco por trozos."""
-        biblioteca = self.server.biblioteca
-        try:
-            longitud = int(self.headers.get("Content-Length", ""))
-        except ValueError:
-            raise ErrorPeticion("Falta el tamaño del archivo", 411)
-        limite = self.server.config["limite_subida_gb"]
-        if longitud <= 0:
-            raise ErrorPeticion("El archivo está vacío")
-        if longitud > limite * 1024 ** 3:
-            raise ErrorPeticion(f"El archivo supera el límite de {limite} GB (se cambia en config.json)", 413)
-        nombre = biblioteca.nombre_seguro(urllib.parse.unquote(self.headers.get("X-Nombre-Archivo", "")))
-        if longitud > shutil.disk_usage(biblioteca.carpeta).free - MARGEN_DISCO:
-            raise ErrorPeticion("No queda espacio suficiente en el disco", 507)
-
-        with biblioteca.lock:
-            destino = biblioteca.destino_libre(nombre)
-            temporal = destino.with_name(destino.name + ".subiendo")
-            archivo = open(temporal, "xb")
-        restante = longitud
-        try:
-            with archivo:
-                while restante:
-                    trozo = self.rfile.read(min(TROZO, restante))
-                    if not trozo:
-                        break
-                    archivo.write(trozo)
-                    restante -= len(trozo)
-        finally:
-            if restante:
-                temporal.unlink(missing_ok=True)
-        if restante:  # el navegador cortó la subida: ya no hay a quién responder
-            self.close_connection = True
-            registrar(f"Subida de «{nombre}» cancelada")
-            return
-        self._cuerpo_leido = True
-        with biblioteca.lock:
-            if destino.exists():
-                destino = biblioteca.destino_libre(nombre)
-            os.replace(temporal, destino)
-        registrar(f"«{usuario}» ha subido «{destino.name}» ({longitud / 1024 ** 2:.0f} MB)")
-        self.enviar_json({"ok": True, "nombre": destino.name}, 201)
-
     def api_borrar_pelicula(self, usuario: str) -> None:
         ruta = str(self.leer_cuerpo().get("ruta", ""))
         movidos = self.server.biblioteca.a_papelera(ruta)
         registrar(f"«{usuario}» ha movido «{ruta}» a la papelera ({movidos} archivo/s)")
         self.enviar_json({"ok": True})
+
+    # --- identificar con TMDB y carátulas (administradores) ---
+
+    def api_identificar_buscar(self, usuario: str) -> None:
+        tmdb = self.server.catalogo.tmdb
+        if not tmdb.clave:
+            raise ErrorPeticion("Falta la clave de TMDB")
+        texto = self.consulta.get("q", [""])[0].strip()[:200]
+        tipo = self.consulta.get("tipo", ["pelicula"])[0]
+        if tipo not in ("pelicula", "serie"):
+            raise ErrorPeticion("Petición no válida")
+        if not texto:
+            raise ErrorPeticion("Escribe el título que quieres buscar")
+        self.enviar_json({"resultados": tmdb.buscar(texto, tipo)})
+
+    def api_identificar(self, usuario: str) -> None:
+        datos = self.leer_cuerpo()
+        grupo, obra = datos.get("grupo"), datos.get("obra")
+        if not isinstance(grupo, str) or not grupo.startswith(("pelicula|", "serie|")) or len(grupo) > 1000:
+            raise ErrorPeticion("Petición no válida")
+        if obra is not None and not (isinstance(obra, str) and RE_OBRA_TMDB.fullmatch(obra)):
+            raise ErrorPeticion("Petición no válida")
+        tmdb = self.server.catalogo.tmdb
+        if obra and not tmdb.clave:
+            raise ErrorPeticion("Falta la clave de TMDB")
+        tmdb.identificar(grupo, obra)
+        registrar(f"«{usuario}» ha identificado «{grupo}» como {obra}" if obra
+                  else f"«{usuario}» ha quitado la identificación de «{grupo}»")
+        self.enviar_json({"ok": True})
+
+    def api_identificar_actualizar(self, usuario: str) -> None:
+        """«Volver a identificar»: lo que no se encontró se vuelve a buscar. También se vuelve a leer la
+        clave de config.json, por si se ha cambiado (MiCine.exe la guarda ahí)."""
+        self.leer_cuerpo()
+        catalogo = self.server.catalogo
+        try:
+            clave = clave_tmdb(leer_json(RUTA_CONFIG, self.server.config))
+        except (OSError, ValueError):
+            clave = catalogo.tmdb.clave
+        self.server.config["tmdb"] = clave
+        catalogo.tmdb.volver_a_identificar(clave)
+        catalogo.revisar()
+        registrar(f"«{usuario}» ha pedido volver a identificar con TMDB")
+        self.enviar_json({"ok": True})
+
+    def api_caratulas_actualizar(self, usuario: str) -> None:
+        self.leer_cuerpo()
+        catalogo = self.server.catalogo
+        if catalogo.caratulas is None:
+            raise ErrorPeticion("Para hacer carátulas, MiCine necesita FFmpeg (ver LEEME.md)", 501)
+        catalogo.caratulas.rehacer()
+        catalogo.revisar()
+        pendientes = catalogo.caratulas.pendientes()
+        registrar(f"«{usuario}» ha pedido rehacer las carátulas ({pendientes})")
+        self.enviar_json({"ok": True, "pendientes": pendientes})
 
     def api_usuarios(self, usuario: str) -> None:
         almacen = self.server.almacen
@@ -1273,8 +2131,11 @@ def main() -> int:
     puerto = args.puerto or config["puerto"]
     direccion = args.direccion or config["direccion"]
     ffmpeg = buscar_ffmpeg()
+    conversor = Conversor(*ffmpeg) if ffmpeg else None
+    tmdb = Tmdb(clave_tmdb(config))
+    catalogo = Catalogo(biblioteca, tmdb, Caratulas(conversor, biblioteca) if conversor else None)
     try:
-        servidor = ServidorMiCine((direccion, puerto), config, almacen, biblioteca, Conversor(*ffmpeg) if ffmpeg else None)
+        servidor = ServidorMiCine((direccion, puerto), config, almacen, biblioteca, conversor, catalogo)
     except OSError as error:
         print(f"No se pudo abrir el puerto {puerto}: {error}")
         print("¿Ya hay otro MiCine abierto? Ciérralo o cambia el puerto en config.json.")
@@ -1289,10 +2150,13 @@ def main() -> int:
     for r in biblioteca.raices[1:]:
         print(f"  También:                {r.ruta}{'' if r.ruta.is_dir() else '  (no se encuentra: ¿disco desconectado?)'}")
     print(f"  Convertir formatos:     {'sí (FFmpeg)' if ffmpeg else 'no (falta FFmpeg; ver LEEME.md)'}")
+    print(f"  Identificar con TMDB:   {'sí' if tmdb.clave else 'no (falta la clave «tmdb» en config.json)'}")
     if not almacen.hay_usuarios():
         print(f"\n  Primera vez: abre http://localhost:{puerto} en ESTE ordenador para crear el administrador.")
     print("\n  Deja esta ventana abierta. Para apagar MiCine, ciérrala o pulsa Ctrl+C.\n")
 
+    # Al arrancar y cada 10 minutos: identificar lo nuevo y hacer las carátulas que falten.
+    threading.Thread(target=revisar_cada_rato, args=(catalogo,), daemon=True).start()
     if config.get("abrir_navegador") and not args.sin_navegador:
         threading.Timer(1.0, webbrowser.open, [f"http://localhost:{puerto}"]).start()
     try:
@@ -1301,6 +2165,8 @@ def main() -> int:
         print("\nMiCine apagado.")
     finally:
         servidor.server_close()
+        if tmdb.sin_guardar:
+            tmdb.guardar()
     return 0
 
 

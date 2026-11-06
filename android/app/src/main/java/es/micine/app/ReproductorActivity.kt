@@ -1,6 +1,7 @@
 package es.micine.app
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -12,6 +13,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.SeekBar
 import android.widget.TextView
@@ -50,6 +52,9 @@ class ReproductorActivity : AppCompatActivity() {
     private lateinit var textoTiempo: TextView
     private lateinit var textoDuracion: TextView
     private lateinit var textoBusqueda: TextView
+    private lateinit var botonSiguiente: View
+    private lateinit var panelSiguiente: View
+    private lateinit var cuentaSiguiente: TextView
 
     private lateinit var ruta: String
     private var duracionMs = 0L
@@ -57,6 +62,11 @@ class ReproductorActivity : AppCompatActivity() {
     private var ultimoGuardado = 0L
     private var seguirAlVolver = true
     private var escala = 0
+
+    /** Episodio que va después de este (si lo hay) y segundos que faltan para que empiece solo. */
+    private var siguiente: Siguiente? = null
+    private var segundosSiguiente = 0
+    private var terminado = false
 
     // Avance y retroceso con el mando, como en Netflix: las pulsaciones seguidas se suman
     // (y aceleran) y el salto se hace al dejar de pulsar.
@@ -70,6 +80,17 @@ class ReproductorActivity : AppCompatActivity() {
     private val ocultarControles = Runnable { mostrarControles(false) }
     private val ocultarAviso = Runnable { aviso.isVisible = false }
     private val confirmarBusqueda = Runnable { aplicarBusqueda() }
+    private val cuentaAtras = object : Runnable {
+        override fun run() {
+            segundosSiguiente--
+            if (segundosSiguiente <= 0) {
+                irAlSiguiente()
+            } else {
+                pintarCuenta()
+                manejador.postDelayed(this, 1000)
+            }
+        }
+    }
 
     /** Atrás con el mando dentro de los controles: primero se ocultan; la siguiente vez se sale. */
     private val atrasOcultaControles = object : OnBackPressedCallback(false) {
@@ -105,7 +126,12 @@ class ReproductorActivity : AppCompatActivity() {
         textoTiempo = findViewById(R.id.tiempo)
         textoDuracion = findViewById(R.id.duracion)
         textoBusqueda = findViewById(R.id.busqueda)
+        botonSiguiente = findViewById(R.id.botonSiguiente)
+        panelSiguiente = findViewById(R.id.panelSiguiente)
+        cuentaSiguiente = findViewById(R.id.cuentaSiguiente)
         findViewById<TextView>(R.id.titulo).text = intent.getStringExtra(EXTRA_TITULO)
+        siguiente = buscarSiguiente(this, ruta)
+        botonSiguiente.isVisible = siguiente != null
 
         // Que los botones no queden debajo de la cámara frontal ni de los bordes curvos.
         ViewCompat.setOnApplyWindowInsetsListener(controles) { vista, insets ->
@@ -148,6 +174,8 @@ class ReproductorActivity : AppCompatActivity() {
         reproductor.attachViews(videoLayout, null, true, false)
         reproductor.videoScale = escalas[escala].first
         if (seguirAlVolver) reproductor.play()
+        // Se salió de la app con la cuenta atrás en marcha: al volver empieza de nuevo.
+        if (panelSiguiente.isVisible) empezarCuenta()
     }
 
     override fun onStop() {
@@ -156,6 +184,7 @@ class ReproductorActivity : AppCompatActivity() {
         guardarProgreso()
         reproductor.pause()
         reproductor.detachViews()
+        manejador.removeCallbacks(cuentaAtras)
     }
 
     override fun onDestroy() {
@@ -182,6 +211,8 @@ class ReproductorActivity : AppCompatActivity() {
 
     /** Mando de la tele, teclado o mando de juegos. Devuelve true si la tecla ya está atendida. */
     private fun tecla(evento: KeyEvent): Boolean {
+        // Con el aviso del siguiente episodio, el mando se mueve por sus botones como siempre.
+        if (panelSiguiente.isVisible) return false
         val pulsada = evento.action == KeyEvent.ACTION_DOWN
         val primera = pulsada && evento.repeatCount == 0
         val enControles = controles.isVisible && controles.hasFocus()
@@ -240,6 +271,13 @@ class ReproductorActivity : AppCompatActivity() {
         findViewById<View>(R.id.avanzar).setOnClickListener { saltar(10_000) }
         findViewById<View>(R.id.botonSubtitulos).setOnClickListener { elegirSubtitulos() }
         findViewById<View>(R.id.botonAudio).setOnClickListener { elegirAudio() }
+        botonSiguiente.setOnClickListener {
+            guardarProgreso()
+            siguiente = buscarSiguiente(this, ruta) ?: siguiente
+            irAlSiguiente()
+        }
+        findViewById<View>(R.id.verSiguiente).setOnClickListener { irAlSiguiente() }
+        findViewById<View>(R.id.cancelarSiguiente).setOnClickListener { finish() }
         findViewById<View>(R.id.botonFormato).setOnClickListener {
             escala = (escala + 1) % escalas.size
             reproductor.videoScale = escalas[escala].first
@@ -270,11 +308,12 @@ class ReproductorActivity : AppCompatActivity() {
             override fun onDown(e: MotionEvent) = true
 
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                mostrarControles(!controles.isVisible)
+                if (!panelSiguiente.isVisible) mostrarControles(!controles.isVisible)
                 return true
             }
 
             override fun onDoubleTap(e: MotionEvent): Boolean {
+                if (panelSiguiente.isVisible) return true
                 val ancho = findViewById<View>(R.id.raiz).width
                 when {
                     e.x < ancho / 3f -> saltar(-10_000)
@@ -316,7 +355,9 @@ class ReproductorActivity : AppCompatActivity() {
             }
             MediaPlayer.Event.EndReached -> {
                 guardarProgreso(terminada = true)
-                finish()
+                terminado = true
+                val otro = buscarSiguiente(this, ruta) ?: siguiente
+                if (otro != null) ofrecerSiguiente(otro) else finish()
             }
             MediaPlayer.Event.EncounteredError -> {
                 cargando.isVisible = false
@@ -324,6 +365,37 @@ class ReproductorActivity : AppCompatActivity() {
                 mostrarAviso("No se pudo reproducir. Comprueba que MiCine sigue encendido en el ordenador o que la descarga terminó bien.", 0)
             }
         }
+    }
+
+    /** Al acabar un episodio: «Siguiente episodio», que empieza solo en 10 segundos si no se cancela. */
+    private fun ofrecerSiguiente(otro: Siguiente) {
+        siguiente = otro
+        mostrarControles(false)
+        cargando.isVisible = false
+        aviso.isVisible = false
+        findViewById<TextView>(R.id.tituloSiguiente).text = otro.detalle
+        Imagenes.cargar(findViewById<ImageView>(R.id.imagenSiguiente), otro.imagen, anchoMaximo = 400)
+        panelSiguiente.isVisible = true
+        findViewById<View>(R.id.verSiguiente).requestFocus()
+        empezarCuenta()
+    }
+
+    private fun empezarCuenta() {
+        segundosSiguiente = SEGUNDOS_SIGUIENTE
+        pintarCuenta()
+        manejador.removeCallbacks(cuentaAtras)
+        manejador.postDelayed(cuentaAtras, 1000)
+    }
+
+    private fun pintarCuenta() {
+        cuentaSiguiente.text = "Empieza en $segundosSiguiente s"
+    }
+
+    private fun irAlSiguiente() {
+        val otro = siguiente ?: return
+        manejador.removeCallbacks(cuentaAtras)
+        startActivity(otro.intent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION))
+        finish()
     }
 
     private fun alternarPausa() {
@@ -469,7 +541,7 @@ class ReproductorActivity : AppCompatActivity() {
 
     /** Se guarda en el móvil (vale sin conexión) y se intenta mandar a MiCine. */
     private fun guardarProgreso(terminada: Boolean = false) {
-        if (duracionMs <= 0 || ruta.isEmpty()) return
+        if (duracionMs <= 0 || ruta.isEmpty() || (terminado && !terminada)) return
         val tiempo = if (terminada) duracionMs else reproductor.time
         if (tiempo < 1000) return
         ultimoGuardado = SystemClock.elapsedRealtime()
@@ -489,5 +561,6 @@ class ReproductorActivity : AppCompatActivity() {
         const val EXTRA_ORIGEN = "origen"
         const val EXTRA_SUBTITULOS = "subtitulos"
         const val EXTRA_INICIO_MS = "inicio_ms"
+        private const val SEGUNDOS_SIGUIENTE = 10
     }
 }

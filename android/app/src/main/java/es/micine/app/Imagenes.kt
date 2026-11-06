@@ -26,6 +26,16 @@ class ImagenPoster(context: Context, attrs: AttributeSet?) : AppCompatImageView(
     }
 }
 
+/**
+ * Clave de caché de una imagen: la ruta sin la firma (cambia cada día). Las carátulas hechas de un
+ * fotograma llevan además `v` (cambia al rehacerlas con «Actualizar carátulas»), que sí cuenta.
+ */
+fun claveImagen(origen: String): String {
+    val ruta = origen.substringBefore('?')
+    val v = origen.substringAfter('?', "").split('&').firstOrNull { it.startsWith("v=") }
+    return if (v != null) "$ruta?$v" else ruta
+}
+
 /** Carga de carátulas con caché en memoria y en disco (así se ven también sin conexión). */
 object Imagenes {
     private val memoria = object : LruCache<String, Bitmap>(32 * 1024 * 1024) {
@@ -39,7 +49,7 @@ object Imagenes {
         vista.setImageDrawable(null)
         if (origen == null) return
         // Las URL firmadas cambian cada día: la caché va por la ruta, sin la firma.
-        val clave = origen.substringBefore('?')
+        val clave = claveImagen(origen)
         memoria.get(clave)?.let {
             vista.setImageBitmap(it)
             return
@@ -56,7 +66,7 @@ object Imagenes {
     }
 
     /** Copia de la carátula ya bajada (para guardarla junto a una descarga). */
-    fun archivoEnCache(context: Context, url: String): File = File(context.cacheDir, "caratulas/${huella(url.substringBefore('?'))}")
+    fun archivoEnCache(context: Context, url: String): File = File(context.cacheDir, "caratulas/${huella(claveImagen(url))}")
 
     private fun decodificar(context: Context, origen: String, clave: String, anchoMaximo: Int): Bitmap? {
         val bytes = if (origen.startsWith("http")) leerConCache(context, origen) else File(origen).readBytes()

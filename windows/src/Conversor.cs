@@ -121,7 +121,7 @@ namespace MiCine
         }
 
         /// <summary>Ejecuta y espera: devuelve lo que sale por la salida estándar.</summary>
-        static byte[] Ejecutar(string exe, List<string> args, int segundos, out int codigo)
+        internal static byte[] Ejecutar(string exe, List<string> args, int segundos, out int codigo)
         {
             var errores = new StringBuilder();
             using (var p = Lanzar(exe, args, errores))

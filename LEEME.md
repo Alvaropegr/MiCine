@@ -1,6 +1,6 @@
 # MiCine
 
-Tu propio cine en casa: las películas están en tu ordenador y las ves desde el navegador, la tele o el móvil. Solo entra quien tenga usuario y contraseña. La app de Android reproduce cualquier formato y permite descargar películas para verlas sin conexión.
+Tu propio cine en casa: las películas y series están en tu ordenador y las ves desde el navegador, la tele o el móvil, ordenadas como en Netflix (Películas, Series con sus temporadas y episodios, Anime). Solo entra quien tenga usuario y contraseña. La app de Android reproduce cualquier formato y permite descargar para verlas sin conexión.
 
 Código y descargas: **https://github.com/Alvaropegr/MiCine** (las apps y `MiCine.exe` están en *Releases*).
 
@@ -14,8 +14,8 @@ Código y descargas: **https://github.com/Alvaropegr/MiCine** (las apps y `MiCin
 | `Iniciar MiCine.bat` y `servidor.py` | Lo mismo, en versión Python (necesita Python instalado). Usan los mismos datos que MiCine.exe, así que puedes usar uno u otro, pero **no los dos a la vez**. |
 | `apk\` | La app para Android: `MiCine-1.2.0.apk` (móviles), `MiCine-1.2.0-firetv.apk` (Fire TV y móviles antiguos) y la `universal` (vale para todo, pero pesa más). También están en GitHub. |
 | `ffmpeg\` | FFmpeg, el conversor: con él, MiCine convierte al momento lo que la tele no sabe reproducir. Si borras la carpeta, MiCine funciona igual, pero sin convertir. No viene en GitHub (ver «FFmpeg»). |
-| `peliculas\` | Aquí van las películas. Puedes subirlas desde la web o copiarlas directamente. |
-| `datos\` | Usuarios, sesiones, por dónde va cada uno y las teles con permiso DLNA. **No lo compartas:** contiene las claves. |
+| `peliculas\` | Aquí van las películas y series (se copian directamente; también puedes añadir otras carpetas o discos). |
+| `datos\` | Usuarios, sesiones, por dónde va cada uno, las teles con permiso DLNA, lo identificado en TMDB (`tmdb.json`) y las carátulas sacadas del vídeo (`caratulas\`). **No lo compartas:** contiene las claves. |
 | `config.json` | Ajustes (puerto, carpeta de películas…). |
 | `tizen\` | La app para teles Samsung (de 2015 en adelante) y el script que la instala. |
 | `docs\Manual-de-MiCine.pdf` | El manual de instalación y uso, con capturas para cada aparato. |
@@ -25,8 +25,8 @@ Código y descargas: **https://github.com/Alvaropegr/MiCine** (las apps y `MiCin
 
 1. **Abre `MiCine.exe`.** La primera vez Windows preguntará por el Firewall: marca **Redes privadas** y pulsa **Permitir**. Si no, el móvil y la tele no podrán conectarse.
 2. **Crea la cuenta de administrador** con el botón **Crear administrador** de la ventana. También puedes hacerlo en `http://localhost:8080`, pero solo desde este ordenador.
-3. **Añade películas.** Usa **Subir** en la web (puedes arrastrar varios archivos a la vez) o cópialas a la carpeta `peliculas`. Las subcarpetas también valen.
-4. **Da acceso a tu familia** en **Usuarios**. Con «Solo ver» pueden ver y descargar. Con «Administrador» además pueden subir, borrar y gestionar usuarios.
+3. **Añade películas y series.** Cópialas a la carpeta `peliculas` (o añade tus carpetas con **Añadir carpeta…**). Las subcarpetas también valen. Desde la web ya no se suben: se copian en el ordenador.
+4. **Da acceso a tu familia** en **Usuarios**. Con «Solo ver» pueden ver y descargar. Con «Administrador» además pueden identificar lo que falte, quitar películas y gestionar usuarios.
 
 Si cierras la ventana de MiCine, sigue funcionando junto al reloj de Windows. Para apagarlo del todo usa **Salir** en ese icono. Si marcas **Iniciar con Windows**, se abre solo al encender el ordenador, ya escondido junto al reloj.
 
@@ -36,10 +36,19 @@ Desde la ventana también puedes cambiar la carpeta de películas (**Cambiar…*
 
 Si tienes películas repartidas (otro disco, una carpeta de series…), pulsa **Añadir carpeta…** en la tarjeta **Películas** de la ventana. Sus películas salen junto a las demás, en un solo catálogo, agrupadas con el nombre de su carpeta (por ejemplo «Series» o «Series/Temporada 2»). Con **Quitar** dejan de salir; no se borra nada.
 
-- Lo que subes desde la web va siempre a la **carpeta principal**.
 - Si un disco está desconectado, sus películas no salen y la ventana lo indica. Al conectarlo vuelven, y con ellas por dónde ibas.
 - Una carpeta que está dentro de otra (o que la contiene) no se puede añadir: sus películas ya salen.
 - La versión Python lee las mismas carpetas (`otras_carpetas` en `config.json`).
+
+## Series, películas, anime y «MiCine»
+
+MiCine ordena todo en secciones: **Películas**, **Series** (una tarjeta por serie; dentro, sus temporadas y episodios en orden), **Anime** y **MiCine** (lo que aún no ha podido identificar). «Seguir viendo» de una serie lleva al episodio a medias o al siguiente, y al acabar un episodio ofrece el siguiente.
+
+- **Por el nombre del archivo** sabe si algo es un episodio y de qué serie: `Serie/Season 01/Serie - S01E02.mkv`, `Serie - 1x02`, `Serie [HDTV 1080p][Cap.102]` (temporada 1, episodio 2), `Temporada 1/02 - Título.mkv`… Los capítulos de la misma serie se juntan aunque estén en carpetas o discos distintos, y si tienes el mismo episodio en 4K y en 1080p salen como dos versiones del mismo.
+- **Con TMDB** (themoviedb.org, gratis) además pone el nombre en español de cada película y serie, los títulos de los episodios y la sinopsis, y separa el anime. Crea una cuenta en themoviedb.org, pide una clave de API (en tu perfil: *Ajustes → API*) y pégala en la ventana de MiCine, en **Series, películas y anime (TMDB)** → **Guardar clave**. Solo se envían los nombres de los archivos. Lo identificado se guarda en `datos\tmdb.json`.
+- **Sin clave** todo funciona igual, pero separando solo por el nombre del archivo (series y películas, sin anime).
+- **Lo que TMDB no reconoce** va a la sección **MiCine**. Un administrador puede pulsar **Identificar…** en la web y elegirlo del buscador, o cambiar el nombre del archivo (mejor `Título (Año)`) y pulsar **Volver a identificar** (en la ventana, o en la web: *Usuarios → Mantenimiento*). Si algo se identificó mal, en la ficha de la serie está **Corregir…**.
+- Se ignoran las carpetas `Plex Versions` (las copias que hace Plex): no salen dos veces.
 
 ## Ver las películas
 
@@ -92,6 +101,8 @@ Alien (1979).jpg         ← carátula
 
 Valen `.srt` y `.vtt` para los subtítulos, y `.jpg`, `.png` y `.webp` para las carátulas. Si cada película va en su propia carpeta, también vale una imagen llamada `poster.jpg` o `folder.jpg`.
 
+**Lo que no tiene carátula propia lleva un fotograma del vídeo** (necesita FFmpeg): MiCine lo saca una vez, en segundo plano y sin ralentizar el ordenador, y lo guarda en `datos\caratulas`. Las películas nuevas se hacen solas. **Actualizar carátulas** (en la tarjeta *Películas* de la ventana, o en la web en *Usuarios → Mantenimiento*) las rehace todas.
+
 ## Descargar para ver sin conexión (app Android)
 
 En la app, toca el botón ⤓ de una película. La descarga sigue aunque cierres la app, aparece en las notificaciones y se reanuda sola si se corta. Las películas descargadas están en la pestaña **Descargas** y se ven sin internet, en el avión o en el coche, con sus subtítulos y su carátula.
@@ -119,8 +130,10 @@ Es la misma app de Android, preparada para manejarse con el mando:
 
 **Instalarla:**
 
+> **Antes de nada: ¿qué Fire TV tienes?** Mira *Configuración → Mi Fire TV → Acerca de*. Si el software dice **Fire OS** (7, 8…), sigue estos pasos. Si dice **OS 1.x** (Vega OS: los modelos más nuevos, como el Fire TV Stick 4K Select), Amazon **no deja instalar apps de fuera de su tienda** (ni Downloader ni MiCine): en esa tele usa otro aparato o el navegador, si lo tiene.
+
 1. **Activa las opciones de desarrollador.** En la Fire TV, ve a *Configuración → Mi Fire TV → Acerca de* y pulsa siete veces seguidas el nombre del dispositivo, hasta que salga el aviso de que ya eres desarrollador.
-2. **Instala Downloader** desde la tienda de Amazon (es gratis) y permítele instalar apps: en *Mi Fire TV → Opciones para desarrolladores → Instalar apps desconocidas*, actívala. En modelos antiguos la opción se llama «Aplicaciones de origen desconocido».
+2. **Instala Downloader** desde la tienda de Amazon (es gratis; búscala escribiendo «Downloader» con el teclado de la pantalla, su icono es naranja) y permítele instalar apps: en *Mi Fire TV → Opciones para desarrolladores → Instalar apps desconocidas*, actívala. En modelos antiguos la opción se llama «Aplicaciones de origen desconocido». Si con Fire OS no te aparece Downloader, instala MiCine desde el ordenador con ADB (abajo).
 3. **Abre Downloader y escribe la dirección** que muestra la ventana de MiCine en **Instalar las apps** (del tipo `192.168.1.20:8080/tele`; también está en la web, en **Apps**, y en la app del móvil, en **⋮ → Instalar en la tele**). Pulsa **Instalar** cuando termine la descarga. Fuera de casa vale `https://github.com/Alvaropegr/MiCine/releases/latest/download/MiCine-firetv.apk`.
 
 Con la misma dirección se actualiza a la versión nueva cuando la haya. También se puede instalar desde el ordenador: con **Depuración ADB** activada en las opciones de desarrollador, ejecuta `adb connect IP-de-la-Fire-TV:5555`, acepta el aviso en la tele y ejecuta `adb install -r apk\MiCine-1.2.0-firetv.apk`.
@@ -157,7 +170,7 @@ La primera vez que la abras, la app buscará MiCine en tu red. Después solo tie
 
 Las teles que no pueden instalar la app (como la Samsung UE40H5570, de 2014) ven MiCine con su propio reproductor, por DLNA. No hay que instalar nada en la tele. Solo funciona con **MiCine.exe** (la versión Python no lo trae) y dentro de casa.
 
-1. Con MiCine.exe en marcha, en la tele abre **Fuente** (o **Multimedia → Vídeos**) y elige **MiCine**.
+1. Con MiCine.exe en marcha, en la tele abre **Fuente** (o **Multimedia → Vídeos**) y elige **MiCine**. Verás **Películas**, **Series** (cada serie con sus temporadas y episodios), **Anime**, **MiCine**, **Añadidas recientemente** y **Todas las películas**.
 2. La primera vez verás **«Dale permiso en la ventana de MiCine del ordenador»**. En el ordenador aparece un aviso junto al reloj, y en la ventana de MiCine, en **Teles con DLNA**, la tele con el botón **Permitir**. Púlsalo.
 3. Vuelve a abrir MiCine en la tele. Verás **Todas las películas**, **Añadidas recientemente** y tus carpetas.
 
@@ -212,9 +225,9 @@ MiCine distingue las visitas que llegan por el túnel. Para MiCine nunca son «e
 | `carpeta_peliculas` | `peliculas` | Puede ser otra carpeta u otro disco, por ejemplo `D:\\Películas`. En JSON la barra invertida va doble. |
 | `otras_carpetas` | `[]` | Más carpetas de películas, por ejemplo `["E:\\Series", "F:\\Pelis"]`. Lo más cómodo es **Añadir carpeta…** en la ventana. |
 | `dias_sesion` | `30` | Días sin usar MiCine antes de tener que volver a entrar. |
-| `limite_subida_gb` | `100` | Tamaño máximo de cada archivo subido. |
 | `abrir_navegador` | `true` | Abrir la web al arrancar (no se abre si MiCine arranca con Windows). |
 | `dlna` | `true` | Que las teles de casa vean MiCine en su lista de fuentes (solo MiCine.exe). También se cambia desde la ventana. |
+| `tmdb` | `""` | Clave de themoviedb.org para identificar películas, series y anime. Lo más cómodo es pegarla en la ventana. |
 
 La carpeta y el puerto se cambian más cómodamente desde la ventana. Para el resto, edita el archivo, cierra MiCine del todo (**Salir** en el icono del reloj) y vuelve a abrirlo.
 
