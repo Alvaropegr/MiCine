@@ -1207,7 +1207,7 @@ namespace MiCine
                 sb.Append("<dc:date>").Append(new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(Py.ANumero(p["fecha"])).ToString("yyyy-MM-dd'T'HH:mm:ss", Py.Inv)).Append("</dc:date>");
             long marca = dlna.Marca(ctx.Aparato, relativa);
             if (marca > 0) sb.Append("<sec:dcmInfo>CREATIONDATE=0,FOLDER=MiCine,BM=").Append(marca).Append("</sec:dcmInfo>");
-            string poster = p["poster"] as string;
+            string poster = CartelTmdb(p) != null ? "cartel.jpg" : p["poster"] as string;
             if (poster == null && dlna.Servidor.Caratulas.Version(Caratulas.Clave(p)) > 0) poster = "fotograma.jpg";
             if (poster != null)
             {
@@ -1438,13 +1438,22 @@ namespace MiCine
             return conBom;
         }
 
+        /// <summary>Las películas identificadas llevan el cartel de TMDB (los episodios, su imagen o fotograma).</summary>
+        string CartelTmdb(Objeto p)
+        {
+            if (p["episodio"] != null) return null;
+            return dlna.Servidor.Identificacion.ClaveCartel(p["obra"] as string);
+        }
+
         void Caratula(string id)
         {
             string ruta;
             Objeto p = Pelicula(id, out ruta);
             string poster = p["poster"] as string;
-            string real = poster == null ? null : dlna.Servidor.Biblioteca.Resolver(poster);
-            if (poster == null)
+            string cartel = CartelTmdb(p);
+            string real = cartel != null ? dlna.Servidor.Identificacion.ArchivoCartel(cartel)
+                : poster == null ? null : dlna.Servidor.Biblioteca.Resolver(poster);
+            if (cartel == null && poster == null)
             {
                 string fotograma = dlna.Servidor.Caratulas.Archivo(Caratulas.Clave(p));
                 if (File.Exists(fotograma)) real = fotograma;

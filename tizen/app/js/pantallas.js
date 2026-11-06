@@ -5,9 +5,17 @@
    y las series se abren en su propia ficha (serie.js); con uno antiguo, todo sigue como antes. */
 
 var ANCHO_TARJETA = 228;   // 200 de carátula + 28 de separación
-var ALTO_FILA = 420;
-var ALTO_FILA_REJILLA = 360;   // filas de la rejilla «de la A a la Z», sin título
-var MAX_FILA = 30;             // tarjetas por sección en Inicio; el resto, en su pestaña
+var ALTO_FILA = 460;           // título de la fila, carátula (300) y su título debajo
+var ALTO_FILA_REJILLA = 400;   // filas de la rejilla «de la A a la Z», sin título
+var MAX_FILA = 30;             // tarjetas por sección (o género); el resto, en «Ver todo»
+var MIN_GENERO = 2;            // un género con menos títulos no tiene fila propia
+var LETRAS = '#ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+
+/** La letra del abecedario de un título: A-Z (sin acentos; la Ñ va con la N) o «#» (números y signos). */
+function letraDe(titulo) {
+  var c = MC.sinAcentos(titulo || '').replace(/^[\s¡¿"'«(\[.]+/, '').charAt(0).toUpperCase();
+  return c >= 'A' && c <= 'Z' ? c : '#';
+}
 
 function enCurso(p) {
   return !!p.progreso && p.progreso.t > 15 && p.progreso.t < p.progreso.d * 0.95;
@@ -22,20 +30,26 @@ function datosVideo(p) {
   return { titulo: p.titulo, poster: p.poster, vista: vista(p), pct: enCurso(p) ? Math.round(p.progreso.t / p.progreso.d * 100) : null };
 }
 
-/** Carátula con su título debajo por si no hay imagen; la imagen se pide solo cuando hace falta.
-    d = {titulo, poster, pct (barra de progreso), vista, etiqueta («T1·E3»), clase}. */
+/** Carátula vertical con el título debajo; la imagen se pide solo cuando hace falta y se recorta
+    para llenar el hueco (los fotogramas del vídeo son apaisados).
+    d = {titulo, poster, pct (barra de progreso), vista, etiqueta («T1·E3»), clase}.
+    Las tarjetas «Ver todo» (clase «todo») llevan el texto dentro y nada debajo. */
 function Tarjeta(peli, d) {
   d = d || datosVideo(peli);
   this.peli = peli;
   this.poster = d.poster;
   this.img = MC.h('img', { alt: '' });
+  var todo = d.clase === 'todo';
   this.el = MC.h('div', { class: 'tarjeta' + (d.clase ? ' ' + d.clase : '') },
-    MC.h('div', { class: 'tarjeta-titulo' }, d.titulo),
-    this.img,
-    d.vista ? MC.h('div', { class: 'tarjeta-vista' }, MC.icono('marca')) : null,
-    d.etiqueta ? MC.h('div', { class: 'tarjeta-etiqueta' }, d.etiqueta) : null,
-    d.pct !== null && d.pct !== undefined ? MC.h('div', { class: 'tarjeta-barra' },
-      MC.h('div', { style: 'width:' + d.pct + '%' })) : null);
+    MC.h('div', { class: 'tarjeta-caja' },
+      todo ? MC.h('div', { class: 'tarjeta-titulo' }, d.titulo)
+        : !d.poster ? MC.h('div', { class: 'tarjeta-sin-imagen' }, MC.icono('play')) : null,
+      this.img,
+      d.vista ? MC.h('div', { class: 'tarjeta-vista' }, MC.icono('marca')) : null,
+      d.etiqueta ? MC.h('div', { class: 'tarjeta-etiqueta' }, d.etiqueta) : null,
+      d.pct !== null && d.pct !== undefined ? MC.h('div', { class: 'tarjeta-barra' },
+        MC.h('div', { style: 'width:' + d.pct + '%' })) : null),
+    todo ? null : MC.h('div', { class: 'tarjeta-pie' }, d.titulo));
   this.cargada = false;
 }
 
@@ -217,9 +231,13 @@ function PantallaInicio() {
   this.pelis = [];
   this.catalogo = null;   // solo con un servidor con secciones
   this.seccion = null;    // pestaña elegida (null = Inicio)
+  this.genero = null;     // dentro de una pestaña, «Ver todo» de un género (null = la pestaña entera)
   this.filas = [];
   this.fila = 0;
   this.menuI = 0;
+  this.letras = null;     // letra → {fila, pos} de su primer título en la rejilla (null = sin abecedario)
+  this.enAbc = false;     // el foco está en el abecedario
+  this.abcI = 0;          // letra enfocada (posición en LETRAS)
 
   this.fondo = MC.h('img', { class: 'fondo-difuso', alt: '' });
   this.arte = MC.h('img', { class: 'heroe-arte', alt: '' });
@@ -232,13 +250,31 @@ function PantallaInicio() {
   this.menuAcciones = MC.h('div', { class: 'menu-items' });
   this.construirMenu();
 
+  // Abecedario a la izquierda, en las pestañas: lleva a la primera película o serie de cada letra.
+  this.abc = MC.h('div', { class: 'abecedario' });
+  this.abcLetras = [];
+  var yo = this;
+  for (var i = 0; i < LETRAS.length; i++) {
+    this.abcLetras.push(MC.h('div', { class: 'abc-letra' }, LETRAS[i]));
+    this.abc.appendChild(this.abcLetras[i]);
+    (function (indice) {
+      yo.abcLetras[indice].addEventListener('click', function () {
+        if (!yo.letras || !yo.letras[LETRAS[indice]]) return;
+        yo.enAbc = true;
+        yo.irLetra(indice);
+        yo.tecla('ok');
+      });
+    })(i);
+  }
+
   this.el = MC.h('div', { class: 'pantalla inicio' },
     this.fondo,
     MC.h('div', { class: 'velo' }),
     MC.h('div', { class: 'menu' }, logo(), this.menuSecciones, this.menuAcciones),
     this.arte,
     MC.h('div', { class: 'heroe' }, this.heroeTitulo, this.heroeMeta, this.heroeInfo, this.heroeBarra),
-    MC.h('div', { class: 'filas' }, this.pista));
+    MC.h('div', { class: 'filas' }, this.pista),
+    this.abc);
 }
 
 /** Menú de arriba. Con secciones: pestañas a la izquierda y Buscar, Actualizar y Cerrar sesión
@@ -362,10 +398,19 @@ PantallaInicio.prototype.filasPlanas = function () {
 };
 
 /** Filas con secciones. Inicio: seguir viendo, una por sección (lo último primero) y añadidas
-    recientemente. Una pestaña: lo suyo a medias, lo último y todo de la A a la Z en rejilla. */
+    recientemente. Una pestaña: lo suyo a medias, lo último, una fila por género (según TMDB) y todo
+    de la A a la Z en rejilla. «Ver todo» de un género: solo la rejilla de ese género. */
 PantallaInicio.prototype.filasCatalogo = function () {
-  var cat = this.catalogo, sec = this.seccion, filas = [], i;
+  var cat = this.catalogo, sec = this.seccion, genero = this.genero, filas = [], i;
   var obras = sec === null ? cat.obras : cat.obras.filter(function (o) { return o.seccion === sec; });
+  if (sec !== null && genero !== null) {
+    var delGenero = obras.filter(function (o) { return o.generos.indexOf(genero) >= 0; });
+    var azGenero = delGenero.sort(porTitulo).map(MC.elementoObra);
+    for (i = 0; i < azGenero.length; i += COLUMNAS) {
+      filas.push({ titulo: i === 0 ? genero + ' · de la A a la Z' : null, pelis: azGenero.slice(i, i + COLUMNAS), rejilla: true });
+    }
+    return filas;
+  }
   var recientes = obras.slice().sort(function (a, b) { return b.fecha - a.fecha; });
 
   var seguir = MC.seguirViendo(obras);
@@ -387,10 +432,39 @@ PantallaInicio.prototype.filasCatalogo = function () {
     }
   } else {
     if (obras.length > 14) filas.push({ titulo: 'Añadidas recientemente', pelis: recientes.slice(0, 20).map(MC.elementoObra) });
+    filas = filas.concat(this.filasGeneros(recientes));
     var az = obras.slice().sort(porTitulo).map(MC.elementoObra);
     for (i = 0; i < az.length; i += COLUMNAS) {
       filas.push({ titulo: i === 0 ? 'De la A a la Z' : null, pelis: az.slice(i, i + COLUMNAS), rejilla: true });
     }
+  }
+  return filas;
+};
+
+/** Una fila por género, de los que más títulos tienen a los que menos (lo último primero en cada una).
+    No salen los géneros con muy pocos títulos ni los que tienen todo (en «Anime», la animación). */
+PantallaInicio.prototype.filasGeneros = function (recientes) {
+  var porGenero = {}, nombres = [], filas = [], i, k;
+  for (i = 0; i < recientes.length; i++) {
+    var gs = recientes[i].generos;
+    for (k = 0; k < gs.length; k++) {
+      if (!porGenero[gs[k]]) {
+        porGenero[gs[k]] = [];
+        nombres.push(gs[k]);
+      }
+      porGenero[gs[k]].push(recientes[i]);
+    }
+  }
+  nombres = nombres.filter(function (g) { return porGenero[g].length >= MIN_GENERO && porGenero[g].length < recientes.length; });
+  nombres.sort(function (a, b) { return porGenero[b].length - porGenero[a].length || (a < b ? -1 : a > b ? 1 : 0); });
+  for (i = 0; i < nombres.length; i++) {
+    var suyas = porGenero[nombres[i]];
+    var fila = { titulo: nombres[i], pelis: suyas.slice(0, MAX_FILA).map(MC.elementoObra) };
+    if (suyas.length > MAX_FILA) {
+      fila.pelis.push({ clave: 'genero:' + nombres[i], genero: nombres[i], n: suyas.length,
+        d: { titulo: 'Ver todo (' + suyas.length + ')', clase: 'todo' } });
+    }
+    filas.push(fila);
   }
   return filas;
 };
@@ -420,6 +494,20 @@ PantallaInicio.prototype.construir = function (sinRecordar) {
     y += f.titulo === null ? ALTO_FILA_REJILLA : ALTO_FILA;
   }
   this.filas = filas;
+
+  // Abecedario: el primer título de cada letra en la rejilla «de la A a la Z» (solo en las pestañas).
+  this.letras = null;
+  this.enAbc = false;
+  if (this.catalogo && this.seccion !== null) {
+    for (i = 0; i < filas.length; i++) {
+      if (!filas[i].rejilla) continue;
+      for (var p = 0; p < filas[i].pelis.length; p++) {
+        var letra = letraDe(filas[i].pelis[p].obra.titulo);
+        if (!this.letras) this.letras = {};
+        if (!this.letras[letra]) this.letras[letra] = { fila: i, pos: p };
+      }
+    }
+  }
 
   if (!filas.length) {
     this.mostrarTexto('Aún no hay películas', this.catalogo
@@ -492,16 +580,72 @@ PantallaInicio.prototype.pintar = function () {
   }
   for (var i = 0; i < this.filas.length; i++) {
     var f = this.filas[i];
-    for (var k = 0; k < f.tarjetas.length; k++) MC.clase(f.tarjetas[k].el, 'foco', i === this.fila && k === f.pos);
+    for (var k = 0; k < f.tarjetas.length; k++) MC.clase(f.tarjetas[k].el, 'foco', !this.enAbc && i === this.fila && k === f.pos);
     MC.mover(f.carril, f.rejilla ? 0 : -f.pos * ANCHO_TARJETA, 0);
   }
-  // Las filas sin título (rejilla) dejan un margen arriba para que la tarjeta enfocada, que crece, se vea entera.
+  this.pintarAbc();
+  // Las filas sin título (rejilla) dejan un margen arriba para que la tarjeta enfocada, que crece, se vea
+  // entera (18 px: justo el hueco bajo los títulos de la fila de antes, que así no asoman).
   var arriba = this.filas[Math.max(0, this.fila)];
-  MC.mover(this.pista, 0, arriba ? -(arriba.y - (arriba.titulo === null ? 44 : 0)) : 0);
+  MC.mover(this.pista, 0, arriba ? -(arriba.y - (arriba.titulo === null ? 18 : 0)) : 0);
   this.cargarCaratulas();
   var yo = this;
   clearTimeout(this.esperaHeroe);
   this.esperaHeroe = setTimeout(function () { yo.pintarHeroe(); }, 120);
+};
+
+/** El abecedario: las letras con títulos se ven más claras; la del título enfocado, en blanco. */
+PantallaInicio.prototype.pintarAbc = function () {
+  MC.clase(this.abc, 'visible', !!this.letras);
+  MC.clase(this.abc, 'activo', this.enAbc);
+  if (!this.letras) return;
+  var f = this.filas[this.fila], el = this.actual();
+  var actual = this.enAbc ? null : f && f.rejilla && el && el.obra ? letraDe(el.obra.titulo) : null;
+  for (var k = 0; k < LETRAS.length; k++) {
+    var l = this.abcLetras[k];
+    MC.clase(l, 'hay', !!this.letras[LETRAS[k]]);
+    MC.clase(l, 'actual', LETRAS[k] === actual);
+    MC.clase(l, 'foco', this.enAbc && k === this.abcI);
+  }
+};
+
+/** Del borde izquierdo de una fila al abecedario, en la letra del título enfocado (o la primera). */
+PantallaInicio.prototype.entrarAbc = function () {
+  var f = this.filas[this.fila], el = this.actual(), j = -1;
+  if (f && f.rejilla && el && el.obra) j = LETRAS.indexOf(letraDe(el.obra.titulo));
+  for (var k = 0; j < 0 && k < LETRAS.length; k++) if (this.letras[LETRAS[k]]) j = k;
+  if (j < 0) return;
+  this.abcVolver = { fila: this.fila, pos: f ? f.pos : 0 };
+  this.enAbc = true;
+  this.irLetra(j);
+};
+
+/** Mientras se recorre el abecedario, la rejilla ya va mostrando el primer título de cada letra. */
+PantallaInicio.prototype.irLetra = function (j) {
+  var destino = this.letras && this.letras[LETRAS[j]];
+  if (!destino) return;
+  this.abcI = j;
+  this.fila = destino.fila;
+  this.filas[destino.fila].pos = destino.pos;
+};
+
+PantallaInicio.prototype.teclaAbc = function (t) {
+  if (t === 'arr' || t === 'aba') {
+    var paso = t === 'arr' ? -1 : 1;
+    for (var j = this.abcI + paso; j >= 0 && j < LETRAS.length; j += paso) {
+      if (this.letras[LETRAS[j]]) { this.irLetra(j); break; }
+    }
+  } else if (t === 'der' || t === 'ok') {
+    this.enAbc = false;                // al título de esa letra
+  } else if (t === 'atras') {
+    this.enAbc = false;                // vuelve a donde estaba
+    var v = this.abcVolver;
+    if (v && this.filas[v.fila]) {
+      this.fila = v.fila;
+      this.filas[v.fila].pos = Math.min(v.pos, this.filas[v.fila].pelis.length - 1);
+    }
+  } else return;
+  this.pintar();
 };
 
 PantallaInicio.prototype.cargarCaratulas = function () {
@@ -549,8 +693,8 @@ PantallaInicio.prototype.ponerArte = function (poster) {
 PantallaInicio.prototype.pintarHeroeObra = function (el) {
   MC.vaciar(this.heroeBarra);
   MC.clase(this.heroeInfo, 'sinopsis', true);
-  if (el.todo) {
-    this.heroeTitulo.textContent = el.todo.titulo;
+  if (el.todo || el.genero) {
+    this.heroeTitulo.textContent = el.todo ? el.todo.titulo : el.genero;
     this.heroeMeta.textContent = el.n + ' títulos';
     this.heroeInfo.textContent = 'Pulsa OK para verlos todos.';
     return this.ponerArte(null);
@@ -584,6 +728,7 @@ PantallaInicio.prototype.pintarHeroeObra = function (el) {
 
 PantallaInicio.prototype.tecla = function (t) {
   var f = this.filas[this.fila], nuevo = !!this.catalogo;
+  if (this.enAbc) return this.teclaAbc(t);
   if (this.fila === -1) {
     if (t === 'izq' && this.menuI > 0) this.menuI--;
     else if (t === 'der' && this.menuI < this.menu.length - 1) this.menuI++;
@@ -592,6 +737,7 @@ PantallaInicio.prototype.tecla = function (t) {
     else if (t === 'atras') return MC.preguntarSalir();
     else return;
   } else if (t === 'izq' && f.pos > 0) f.pos--;
+  else if (t === 'izq' && this.letras) this.entrarAbc();
   else if (t === 'der' && f.pos < f.pelis.length - 1) f.pos++;
   else if (t === 'arr') {
     // Al subir al menú, el foco va a la pestaña que se está viendo.
@@ -601,9 +747,11 @@ PantallaInicio.prototype.tecla = function (t) {
   else if (t === 'ok') return nuevo ? this.abrir(this.actual()) : MC.mostrar(new PantallaDetalle(this.actual(), this));
   else if (t === 'play' || t === 'playpausa') {
     if (!nuevo) return MC.reproducir(this.actual(), enCurso(this.actual()), this);
-    if (!this.actual().todo) return MC.reproducirElemento(this.actual(), this);
+    if (!this.actual().todo && !this.actual().genero) return MC.reproducirElemento(this.actual(), this);
     return;
   } else if (t === 'atras') {
+    // Viendo un género entero, VOLVER lleva a la pestaña, a la fila de ese género.
+    if (nuevo && this.genero !== null) return this.salirGenero();
     if (this.fila === 0 && f.pos === 0) {
       // En una pestaña, VOLVER lleva a Inicio; en Inicio, pregunta si se sale.
       if (nuevo && this.seccion !== null) return this.irSeccion(null);
@@ -626,14 +774,40 @@ PantallaInicio.prototype.cambiarFila = function (paso) {
 PantallaInicio.prototype.abrir = function (el) {
   if (!el) return;
   if (el.todo) return this.irSeccion(el.todo.id);
+  if (el.genero) return this.irGenero(el.genero);
   MC.abrirElemento(el, this);
 };
 
 /** Cambia de pestaña (null = Inicio) y lleva el foco a la primera fila. */
 PantallaInicio.prototype.irSeccion = function (id) {
   this.seccion = id;
+  this.genero = null;
   this.construir(true);
   if (this.filas.length) this.fila = 0;
+  this.pintar();
+};
+
+/** «Ver todo» de un género: su rejilla de la A a la Z (con abecedario). */
+PantallaInicio.prototype.irGenero = function (genero) {
+  this.genero = genero;
+  this.construir(true);
+  if (this.filas.length) this.fila = 0;
+  this.pintar();
+};
+
+/** De vuelta a la pestaña, en la tarjeta «Ver todo» de la fila del género. */
+PantallaInicio.prototype.salirGenero = function () {
+  var genero = this.genero;
+  this.genero = null;
+  this.construir(true);
+  for (var i = 0; i < this.filas.length; i++) {
+    var f = this.filas[i];
+    if (!f.rejilla && f.titulo === genero) {
+      this.fila = i;
+      f.pos = f.pelis.length - 1;
+      break;
+    }
+  }
   this.pintar();
 };
 
@@ -725,6 +899,7 @@ PantallaDetalle.prototype.elegirVersion = function () {
 // ── Buscar ─────────────────────────────────────────────────────────────
 
 var COLUMNAS = 7;
+var ALTO_REJILLA_BUSCAR = 412;   // 20 de margen + 300 de carátula + 76 de título + 16
 
 /** catalogo: true si «pelis» son tarjetas de obras (servidor con secciones). */
 function PantallaBuscar(pelis, volver, catalogo) {
@@ -778,7 +953,7 @@ PantallaBuscar.prototype.pintar = function () {
     MC.clase(this.resultados[k].el, 'foco', k === this.i);
     if (Math.abs(Math.floor(k / COLUMNAS) - filaFoco) <= 2) this.resultados[k].cargar();
   }
-  MC.mover(this.rejilla, 0, -Math.max(0, filaFoco - 1) * 380);
+  MC.mover(this.rejilla, 0, -Math.max(0, filaFoco - 1) * ALTO_REJILLA_BUSCAR);
 };
 
 PantallaBuscar.prototype.entrarPantalla = function () {

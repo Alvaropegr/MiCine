@@ -589,7 +589,9 @@ namespace MiCine
                 }
                 foreach (Objeto s in (List<object>)p["subtitulos"]) s["url"] = Almacen.Enlace(usuario, (string)s["ruta"]);
             }
-            // Carátula de cada obra: la de su primera película o la del episodio más bajo que tenga
+            // Carátula de cada obra: el cartel de TMDB si ya está descargado; si no, la de su primera
+            // película o la del episodio más bajo que tenga (imagen propia o fotograma)
+            var ident = servidor.Identificacion;
             var elegido = new Dictionary<string, Objeto>(StringComparer.Ordinal);
             foreach (var p in peliculas)
             {
@@ -597,9 +599,16 @@ namespace MiCine
                 if (obra == null || p["poster"] == null) continue;
                 if (!elegido.ContainsKey(obra)) elegido[obra] = p;
             }
-            foreach (var kv in elegido) { var o = obras.ObjetoDe(kv.Key); if (o != null) o["poster"] = kv.Value["poster"]; }
+            foreach (string id in obras.Claves)
+            {
+                var o = obras.ObjetoDe(id);
+                if (o == null) continue;
+                string cartel = Py.Verdad(o["identificada"]) ? ident.ClaveCartel(id) : null;
+                Objeto p;
+                if (cartel != null) o["poster"] = Almacen.EnlaceCaratula(usuario, cartel, ident.VersionCartel(cartel));
+                else if (elegido.TryGetValue(id, out p)) o["poster"] = p["poster"];
+            }
 
-            var ident = servidor.Identificacion;
             // La dirección de este ordenador en la red de casa: la que hay que escribir en la tele.
             string ip = servidor.Direccion == "0.0.0.0" || servidor.Direccion == "" ? Servidor.IpEnRed() : null;
             var datos = new Objeto
@@ -621,7 +630,9 @@ namespace MiCine
             string clave = nombre.Substring(0, 20);
             if (UsuarioActual() == null && Almacen.UsuarioDeEnlace("caratula:" + clave, consulta) == null)
                 throw new ErrorPeticion("Inicia sesión para continuar", 401);
+            // El fotograma del vídeo o, con la misma forma de enlace, el cartel de TMDB de una obra
             string archivo = servidor.Caratulas.Archivo(clave);
+            if (!File.Exists(archivo)) archivo = servidor.Identificacion.ArchivoCartel(clave);
             if (!File.Exists(archivo)) throw new ErrorPeticion("No encontrado", 404);
             EnviarBytes(File.ReadAllBytes(archivo), "image/jpeg", 200, Lista("Cache-Control", "private, max-age=86400"));
         }

@@ -15,7 +15,7 @@ Código y descargas: **https://github.com/Alvaropegr/MiCine** (las apps y `MiCin
 | `apk\` | La app para Android: `MiCine-1.2.0.apk` (móviles), `MiCine-1.2.0-firetv.apk` (Fire TV y móviles antiguos) y la `universal` (vale para todo, pero pesa más). También están en GitHub. |
 | `ffmpeg\` | FFmpeg, el conversor: con él, MiCine convierte al momento lo que la tele no sabe reproducir. Si borras la carpeta, MiCine funciona igual, pero sin convertir. No viene en GitHub (ver «FFmpeg»). |
 | `peliculas\` | Aquí van las películas y series (se copian directamente; también puedes añadir otras carpetas o discos). |
-| `datos\` | Usuarios, sesiones, por dónde va cada uno, las teles con permiso DLNA, lo identificado en TMDB (`tmdb.json`) y las carátulas sacadas del vídeo (`caratulas\`). **No lo compartas:** contiene las claves. |
+| `datos\` | Usuarios, sesiones, por dónde va cada uno, las teles con permiso DLNA, lo identificado en TMDB (`tmdb.json`), sus carteles (`carteles\`) y las carátulas sacadas del vídeo (`caratulas\`). **No lo compartas:** contiene las claves. |
 | `config.json` | Ajustes (puerto, carpeta de películas…). |
 | `tizen\` | La app para teles Samsung (de 2015 en adelante) y el script que la instala. |
 | `docs\Manual-de-MiCine.pdf` | El manual de instalación y uso, con capturas para cada aparato. |
@@ -45,7 +45,7 @@ Si tienes películas repartidas (otro disco, una carpeta de series…), pulsa **
 MiCine ordena todo en secciones: **Películas**, **Series** (una tarjeta por serie; dentro, sus temporadas y episodios en orden), **Anime** y **MiCine** (lo que aún no ha podido identificar). «Seguir viendo» de una serie lleva al episodio a medias o al siguiente, y al acabar un episodio ofrece el siguiente.
 
 - **Por el nombre del archivo** sabe si algo es un episodio y de qué serie: `Serie/Season 01/Serie - S01E02.mkv`, `Serie - 1x02`, `Serie [HDTV 1080p][Cap.102]` (temporada 1, episodio 2), `Temporada 1/02 - Título.mkv`… Los capítulos de la misma serie se juntan aunque estén en carpetas o discos distintos, y si tienes el mismo episodio en 4K y en 1080p salen como dos versiones del mismo.
-- **Con TMDB** (themoviedb.org, gratis) además pone el nombre en español de cada película y serie, los títulos de los episodios y la sinopsis, y separa el anime. Crea una cuenta en themoviedb.org, pide una clave de API (en tu perfil: *Ajustes → API*) y pégala en la ventana de MiCine, en **Series, películas y anime (TMDB)** → **Guardar clave**. Solo se envían los nombres de los archivos. Lo identificado se guarda en `datos\tmdb.json`.
+- **Con TMDB** (themoviedb.org, gratis) además pone el nombre en español de cada película y serie, los títulos de los episodios, la sinopsis, los géneros y el cartel, y separa el anime. En la app de la tele, cada pestaña tiene una fila por género y un abecedario a la izquierda para saltar a cualquier título. Crea una cuenta en themoviedb.org, pide una clave de API (en tu perfil: *Ajustes → API*) y pégala en la ventana de MiCine, en **Series, películas y anime (TMDB)** → **Guardar clave**. Solo se envían los nombres de los archivos. Lo identificado se guarda en `datos\tmdb.json`.
 - **Sin clave** todo funciona igual, pero separando solo por el nombre del archivo (series y películas, sin anime).
 - **Lo que TMDB no reconoce** va a la sección **MiCine**. Un administrador puede pulsar **Identificar…** en la web y elegirlo del buscador, o cambiar el nombre del archivo (mejor `Título (Año)`) y pulsar **Volver a identificar** (en la ventana, o en la web: *Usuarios → Mantenimiento*). Si algo se identificó mal, en la ficha de la serie está **Corregir…**.
 - Se ignoran las carpetas `Plex Versions` (las copias que hace Plex): no salen dos veces.
@@ -101,7 +101,7 @@ Alien (1979).jpg         ← carátula
 
 Valen `.srt` y `.vtt` para los subtítulos, y `.jpg`, `.png` y `.webp` para las carátulas. Si cada película va en su propia carpeta, también vale una imagen llamada `poster.jpg` o `folder.jpg`.
 
-**Lo que no tiene carátula propia lleva un fotograma del vídeo** (necesita FFmpeg): MiCine lo saca una vez, en segundo plano y sin ralentizar el ordenador, y lo guarda en `datos\caratulas`. Las películas nuevas se hacen solas. **Actualizar carátulas** (en la tarjeta *Películas* de la ventana, o en la web en *Usuarios → Mantenimiento*) las rehace todas.
+**Con TMDB, las películas y series identificadas llevan su cartel.** **Lo demás, si no tiene carátula propia, lleva un fotograma del vídeo** (necesita FFmpeg): MiCine lo saca una vez, en segundo plano y sin ralentizar el ordenador, y lo guarda en `datos\caratulas`. Las películas nuevas se hacen solas. **Actualizar carátulas** (en la tarjeta *Películas* de la ventana, o en la web en *Usuarios → Mantenimiento*) las rehace todas.
 
 ## Descargar para ver sin conexión (app Android)
 

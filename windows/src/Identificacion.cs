@@ -22,7 +22,7 @@ namespace MiCine
 
         sealed class Busqueda { public string Grupo, Titulo; public bool Serie; public int? Anio; }
 
-        readonly string archivo;
+        readonly string archivo, carpetaCarteles;
         readonly Func<List<Objeto>> listar;
         readonly object cerrojo = new object();
         readonly AutoResetEvent despertar = new AutoResetEvent(false);
@@ -33,6 +33,10 @@ namespace MiCine
         HashSet<string> detallesPendientes = new HashSet<string>(StringComparer.Ordinal);
         HashSet<string> temporadasPendientes = new HashSet<string>(StringComparer.Ordinal);
         readonly HashSet<string> detallesFallidos = new HashSet<string>(StringComparer.Ordinal); // 404: hasta reiniciar o reintentar
+        // Carteles de TMDB guardados en datos\carteles\<clave>.jpg (clave: obra y ruta del cartel)
+        readonly HashSet<string> cartelesHechos = new HashSet<string>(StringComparer.Ordinal);
+        readonly HashSet<string> cartelesFallidos = new HashSet<string>(StringComparer.Ordinal); // hasta reiniciar o reintentar
+        Dictionary<string, string> cartelesPendientes = new Dictionary<string, string>(StringComparer.Ordinal); // clave → ruta en TMDB
         DateTime ultimoGuardado = DateTime.MinValue;
         volatile bool activo, sinClaveValida, cambios;
         volatile string estado;
@@ -49,7 +53,61 @@ namespace MiCine
             if (datos == null) datos = new Objeto { { "version", 1L } };
             foreach (string k in new[] { "busquedas", "obras", "manual" })
                 if (datos.ObjetoDe(k) == null) datos[k] = new Objeto();
+            carpetaCarteles = Path.Combine(carpetaDatos, "carteles");
+            try
+            {
+                if (Directory.Exists(carpetaCarteles))
+                    foreach (string f in Directory.GetFiles(carpetaCarteles))
+                    {
+                        string n = Path.GetFileName(f);
+                        if (n.EndsWith(".tmp", StringComparison.Ordinal)) { try { File.Delete(f); } catch (Exception) { } continue; }
+                        if (System.Text.RegularExpressions.Regex.IsMatch(n, @"\A[0-9a-f]{20}\.jpg\z")) cartelesHechos.Add(n.Substring(0, 20));
+                    }
+            }
+            catch (Exception) { }
             CambiarClave(clave);
+        }
+
+        // ── carteles de TMDB ─────────────────────────────────────────────
+
+        static string ClaveDeCartel(string obra, string ruta)
+        {
+            return Nombres.Sha1Hex("tmdb|" + obra + "|" + ruta).Substring(0, 20);
+        }
+
+        /// <summary>La clave del cartel de TMDB de una obra identificada, si ya está descargado (si no, null).</summary>
+        public string ClaveCartel(string obra)
+        {
+            if (obra == null) return null;
+            lock (cerrojo)
+            {
+                if (tmdb == null) return null;
+                var info = Obras.ObjetoDe(obra);
+                string ruta = info != null ? info["cartel"] as string : null;
+                if (ruta == null) return null;
+                string clave = ClaveDeCartel(obra, ruta);
+                return cartelesHechos.Contains(clave) ? clave : null;
+            }
+        }
+
+        public string ArchivoCartel(string clave) { return Path.Combine(carpetaCarteles, clave + ".jpg"); }
+
+        /// <summary>Segundos de cuando se descargó (va en el enlace, como en las carátulas del vídeo).</summary>
+        public long VersionCartel(string clave)
+        {
+            try { return Py.Segundos(File.GetLastWriteTimeUtc(ArchivoCartel(clave))); }
+            catch (Exception) { return 0; }
+        }
+
+        public int CartelesPendientes { get { lock (cerrojo) return cartelesPendientes.Count; } }
+
+        /// <summary>El cartel de una ficha recién llegada, a la cola (sin esperar a la próxima revisión). Con el cerrojo cogido.</summary>
+        void EncolarCartel(string obra, Objeto info)
+        {
+            string ruta = info["cartel"] as string;
+            if (ruta == null) return;
+            string clave = ClaveDeCartel(obra, ruta);
+            if (!cartelesHechos.Contains(clave) && !cartelesFallidos.Contains(clave)) cartelesPendientes[clave] = ruta;
         }
 
         public bool ConClave { get { return tmdb != null; } }
@@ -163,6 +221,7 @@ namespace MiCine
             var buscar = new Dictionary<string, Busqueda>(StringComparer.Ordinal);
             var detalles = new HashSet<string>(StringComparer.Ordinal);
             var temporadas = new HashSet<string>(StringComparer.Ordinal);
+            var carteles = new Dictionary<string, string>(StringComparer.Ordinal);
             var presentes = new HashSet<string>(StringComparer.Ordinal);
             int identificados = 0, enMiCine = 0;
             bool conClave;
@@ -176,11 +235,18 @@ namespace MiCine
                     string id = ObraDe(g);
                     Objeto info = id != null ? Obras.ObjetoDe(id) : null;
                     if (conClave && id == null && Manual[g] == null && Busquedas[g] == null) buscar[g] = porGrupo[g];
-                    if (id != null && info == null && !detallesFallidos.Contains(id)) detalles.Add(id);
+                    // Sin ficha, o con una de antes de MiCine 1.4 (sin géneros ni cartel): se pide a TMDB
+                    if (id != null && (info == null || !info.Contiene("generos")) && !detallesFallidos.Contains(id)) detalles.Add(id);
                     string seccion;
                     bool identificada = info != null;
                     if (identificada)
                     {
+                        string cartel = info["cartel"] as string;
+                        if (cartel != null)
+                        {
+                            string clave = ClaveDeCartel(id, cartel);
+                            if (!cartelesHechos.Contains(clave) && !cartelesFallidos.Contains(clave)) carteles[clave] = cartel;
+                        }
                         seccion = Py.Verdad(info["anime"]) ? ANIME : id.StartsWith("tv:", StringComparison.Ordinal) ? SERIES : PELICULAS;
                         identificados++;
                     }
@@ -211,6 +277,7 @@ namespace MiCine
                             { "anio", identificada ? info["anio"] : (b.Anio != null ? (object)(long)b.Anio.Value : null) },
                             { "sinopsis", identificada ? info.Obtener("sinopsis", null) : null },
                             { "anime", identificada && Py.Verdad(info["anime"]) },
+                            { "generos", identificada && info["generos"] is List<object> ? info["generos"] : new List<object>() },
                             { "seccion", seccion }, { "identificada", identificada },
                             { "poster", null },
                         };
@@ -242,12 +309,13 @@ namespace MiCine
                     busquedasPendientes = buscar;
                     detallesPendientes = detalles;
                     temporadasPendientes = temporadas;
+                    cartelesPendientes = carteles;
                 }
             }
             Total = analizadas.Count;
             Identificados = identificados;
             EnMiCine = enMiCine;
-            if (conClave && (buscar.Count > 0 || detalles.Count > 0 || temporadas.Count > 0)) despertar.Set();
+            if (conClave && (buscar.Count > 0 || detalles.Count > 0 || temporadas.Count > 0 || carteles.Count > 0)) despertar.Set();
 
             secciones = new List<object>();
             foreach (var s in Secciones)
@@ -294,15 +362,19 @@ namespace MiCine
                     }
                     Tmdb cliente;
                     lock (cerrojo) cliente = tmdb;
-                    if (cliente == null || sinClaveValida || Pendientes == 0)
+                    if (cliente == null || sinClaveValida || (Pendientes == 0 && CartelesPendientes == 0))
                     {
                         Guardar();
                         despertar.WaitOne(CADA_CUANTO);
                         continue;
                     }
-                    estado = "Identificando con TMDB…";
-                    Paso(cliente);
-                    if (Pendientes == 0) estado = null;
+                    if (Pendientes > 0)
+                    {
+                        estado = "Identificando con TMDB…";
+                        Paso(cliente);
+                        if (Pendientes == 0) estado = null;
+                    }
+                    else PasoCartel();
                 }
                 catch (ErrorTmdb e)
                 {
@@ -361,7 +433,15 @@ namespace MiCine
                     lock (cerrojo) { detallesFallidos.Add(detalle); detallesPendientes.Remove(detalle); }
                     return;
                 }
-                lock (cerrojo) { Obras[detalle] = d; detallesPendientes.Remove(detalle); }
+                lock (cerrojo)
+                {
+                    // Al volver a pedir una ficha (para los géneros) se conservan los nombres de episodio
+                    var anterior = Obras.ObjetoDe(detalle);
+                    if (anterior != null && anterior.ObjetoDe("temporadas") != null) d["temporadas"] = anterior["temporadas"];
+                    Obras[detalle] = d;
+                    detallesPendientes.Remove(detalle);
+                    EncolarCartel(detalle, d);
+                }
             }
             else if (temporada != null)
             {
@@ -386,6 +466,37 @@ namespace MiCine
             cambios = true;
             Thread.Sleep(150);
             if (Pendientes == 0 || (DateTime.UtcNow - ultimoGuardado).TotalSeconds >= 5) Guardar();
+        }
+
+        /// <summary>Descarga un cartel de TMDB (después de identificar todo lo pendiente).</summary>
+        void PasoCartel()
+        {
+            string clave = null, ruta = null;
+            lock (cerrojo)
+                foreach (var kv in cartelesPendientes) { clave = kv.Key; ruta = kv.Value; break; }
+            if (clave == null) return;
+            bool bien = false;
+            try
+            {
+                byte[] imagen = Tmdb.DescargarCartel(ruta);
+                Directory.CreateDirectory(carpetaCarteles);
+                string temporal = ArchivoCartel(clave) + ".tmp";
+                File.WriteAllBytes(temporal, imagen);
+                Nativo.ReemplazarConReintentos(temporal, ArchivoCartel(clave));
+                bien = true;
+            }
+            catch (ErrorTmdb e)
+            {
+                // Sin conexión: se deja en la cola y se vuelve a probar más tarde
+                if (e.Codigo == 0 || e.Codigo == 429 || e.Codigo >= 500) throw;
+            }
+            lock (cerrojo)
+            {
+                cartelesPendientes.Remove(clave);
+                if (bien) cartelesHechos.Add(clave); else cartelesFallidos.Add(clave);
+                if (cartelesPendientes.Count == 0) Registro.Anotar("Carteles de TMDB al día (" + cartelesHechos.Count + ")");
+            }
+            Thread.Sleep(100);
         }
 
         void Guardar()
@@ -447,7 +558,7 @@ namespace MiCine
                     Objeto d;
                     try { d = cliente.Detalle(obra); }
                     catch (ErrorTmdb e) { throw new ErrorPeticion(e.Message, 502); }
-                    lock (cerrojo) Obras[obra] = d;
+                    lock (cerrojo) { Obras[obra] = d; EncolarCartel(obra, d); }
                 }
             }
             lock (cerrojo)
@@ -471,6 +582,7 @@ namespace MiCine
                     if (b == null || b["obra"] == null) Busquedas.Quitar(g);
                 }
                 detallesFallidos.Clear();
+                cartelesFallidos.Clear();
             }
             sinClaveValida = false;
             estado = null;

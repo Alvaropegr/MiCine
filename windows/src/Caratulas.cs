@@ -13,8 +13,13 @@ namespace MiCine
     /// </summary>
     public sealed class Caratulas
     {
-        public const int ANCHO = 400, ALTO = 600;
         const int CADA_CUANTO = 10 * 60 * 1000;
+        /// <summary>
+        /// Formato de las carátulas guardadas (archivo «formato» de la carpeta). Hasta MiCine 1.3 eran el
+        /// fotograma sobre un fondo desenfocado en 2:3; desde la 1.4, el fotograma entero. Si no coincide,
+        /// se borran y se vuelven a hacer (las comparte servidor.py).
+        /// </summary>
+        public const string FORMATO = "2";
         static readonly double[] Momentos = { 0.20, 0.35, 0.50, 0.10, 0.65 };
 
         sealed class Tarea { public string Ruta, Clave; }
@@ -41,6 +46,20 @@ namespace MiCine
             this.resolver = resolver;
             try
             {
+                string marca = Path.Combine(carpeta, "formato");
+                // Sin FFmpeg no se podrían rehacer: entonces se dejan las que haya
+                bool vieja = conversor != null && Directory.Exists(carpeta) && (!File.Exists(marca) || File.ReadAllText(marca).Trim() != FORMATO);
+                if (vieja)
+                {
+                    foreach (string f in Directory.GetFiles(carpeta))
+                        if (Valida.IsMatch(Path.GetFileName(f))) { try { File.Delete(f); } catch (Exception) { } }
+                    Registro.Anotar("Las carátulas del vídeo se vuelven a hacer con el fotograma entero");
+                }
+                if (conversor != null)
+                {
+                    Directory.CreateDirectory(carpeta);
+                    if (vieja || !File.Exists(marca)) File.WriteAllText(marca, FORMATO);
+                }
                 if (Directory.Exists(carpeta))
                     foreach (string f in Directory.GetFiles(carpeta))
                     {
@@ -122,7 +141,7 @@ namespace MiCine
                 {
                     if (Directory.Exists(carpeta))
                         foreach (string f in Directory.GetFiles(carpeta))
-                            try { File.Delete(f); } catch (Exception) { }
+                            if (Path.GetFileName(f) != "formato") try { File.Delete(f); } catch (Exception) { }
                 }
                 catch (Exception) { }
             }
@@ -175,13 +194,12 @@ namespace MiCine
         }
 
         const string FILTRO =
-            "[0:v:0]yadif=deint=interlaced,scale=trunc(iw*sar/2)*2:ih,setsar=1,thumbnail=40,split=3[a][b][c];" +
-            "[a]scale=400:600:force_original_aspect_ratio=increase,crop=400:600,boxblur=18:3,eq=brightness=-0.12[fondo];" +
-            "[b]scale=400:-2[frente];[fondo][frente]overlay=0:(H-h)/2,format=yuvj420p[img];[c]scale=16:16,format=gray[g]";
+            "[0:v:0]yadif=deint=interlaced,scale=trunc(iw*sar/2)*2:ih,setsar=1,thumbnail=40,split=2[a][c];" +
+            "[a]scale=960:540:force_original_aspect_ratio=increase,crop=960:540,format=yuvj420p[img];[c]scale=16:16,format=gray[g]";
 
         /// <summary>
-        /// Un fotograma al 20 % (si sale casi negro o plano, al 35 %, 50 %, 10 % o 65 %): el fotograma a lo
-        /// ancho sobre él mismo ampliado y desenfocado, para que quede una carátula vertical.
+        /// Un fotograma al 20 % (si sale casi negro o plano, al 35 %, 50 %, 10 % o 65 %), entero y en 16:9.
+        /// Cada aparato lo recorta a su hueco: vertical en las tarjetas y apaisado en los episodios.
         /// </summary>
         bool Hacer(Tarea t)
         {

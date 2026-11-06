@@ -20,7 +20,23 @@ namespace MiCine
     public sealed class Tmdb
     {
         public const string IMAGENES = "https://image.tmdb.org/t/p/w185";
+        /// <summary>Los carteles que se guardan para las tarjetas y las fichas (500 px de ancho).</summary>
+        public const string CARTELES = "https://image.tmdb.org/t/p/w500";
         readonly string clave, baseUrl;
+
+        /// <summary>
+        /// Géneros por su número de TMDB, siempre en español (en español, TMDB deja en inglés algunos de
+        /// series, como «Action &amp; Adventure»). Los que no estén aquí se toman con el nombre que dé TMDB.
+        /// </summary>
+        static readonly Dictionary<long, string> Generos = new Dictionary<long, string>
+        {
+            { 28, "Acción" }, { 12, "Aventura" }, { 16, "Animación" }, { 35, "Comedia" }, { 80, "Crimen" },
+            { 99, "Documental" }, { 18, "Drama" }, { 10751, "Familia" }, { 14, "Fantasía" }, { 36, "Historia" },
+            { 27, "Terror" }, { 10402, "Música" }, { 9648, "Misterio" }, { 10749, "Romance" }, { 878, "Ciencia ficción" },
+            { 10770, "Película de TV" }, { 53, "Suspense" }, { 10752, "Bélica" }, { 37, "Western" },
+            { 10759, "Acción y aventura" }, { 10762, "Infantil" }, { 10763, "Noticias" }, { 10764, "Reality" },
+            { 10765, "Ciencia ficción y fantasía" }, { 10766, "Telenovela" }, { 10767, "Entrevistas" }, { 10768, "Bélica y política" },
+        };
 
         static Tmdb()
         {
@@ -114,17 +130,72 @@ namespace MiCine
             if (fecha.Length >= 4 && Py.Entero(fecha.Substring(0, 4), out a)) anio = a;
             string sinopsis = Py.Str(d.Obtener("overview", "") ?? "");
             bool animacion = false;
+            var nombres = new List<object>();
             var generos = d.Obtener("genres", null) as List<object>;
             if (generos != null)
-                foreach (object g in generos) { var go = g as Objeto; if (go != null && Py.EsNumero(go["id"]) && Py.ANumero(go["id"]) == 16) animacion = true; }
+                foreach (object g in generos)
+                {
+                    var go = g as Objeto;
+                    if (go == null || !Py.EsNumero(go["id"])) continue;
+                    long n = (long)Py.ANumero(go["id"]);
+                    if (n == 16) animacion = true;
+                    AnadirGenero(nombres, n, go["name"] as string);
+                }
             var ids = d.Obtener("genre_ids", null) as List<object>; // en los resultados de búsqueda
-            if (ids != null) foreach (object g in ids) if (Py.EsNumero(g) && Py.ANumero(g) == 16) animacion = true;
+            if (ids != null)
+                foreach (object g in ids)
+                {
+                    if (!Py.EsNumero(g)) continue;
+                    long n = (long)Py.ANumero(g);
+                    if (n == 16) animacion = true;
+                    AnadirGenero(nombres, n, null);
+                }
             bool anime = animacion && Py.Str(d.Obtener("original_language", "") ?? "") == "ja";
+            string cartel = d.Obtener("poster_path", null) as string;
+            if (cartel != null && !System.Text.RegularExpressions.Regex.IsMatch(cartel, @"\A/[\w.-]{1,100}\z")) cartel = null;
             return new Objeto
             {
                 { "tipo", serie ? "serie" : "pelicula" }, { "titulo", titulo }, { "anio", anio },
                 { "sinopsis", sinopsis != "" ? (object)sinopsis : null }, { "anime", anime },
+                { "generos", nombres }, { "cartel", cartel },
             };
+        }
+
+        static void AnadirGenero(List<object> lista, long id, string nombreTmdb)
+        {
+            string nombre;
+            if (!Generos.TryGetValue(id, out nombre)) nombre = nombreTmdb != null ? Py.Strip(nombreTmdb) : null;
+            if (!string.IsNullOrEmpty(nombre) && !lista.Contains(nombre)) lista.Add(nombre);
+        }
+
+        /// <summary>Descarga el cartel de una obra (ruta tipo «/abc.jpg»). Las imágenes de TMDB no piden clave.</summary>
+        public static byte[] DescargarCartel(string ruta)
+        {
+            string url = (Environment.GetEnvironmentVariable("MICINE_TMDB_IMAGENES") ?? CARTELES).TrimEnd('/') + ruta;
+            var peticion = (HttpWebRequest)WebRequest.Create(url);
+            peticion.Timeout = 20000;
+            peticion.ReadWriteTimeout = 20000;
+            peticion.UserAgent = "MiCine/1.3";
+            try
+            {
+                using (var respuesta = (HttpWebResponse)peticion.GetResponse())
+                using (var flujo = respuesta.GetResponseStream())
+                using (var memoria = new MemoryStream())
+                {
+                    flujo.CopyTo(memoria);
+                    byte[] datos = memoria.ToArray();
+                    // Solo JPEG (empieza por FF D8), y sin pasarse de tamaño
+                    if (datos.Length < 4 || datos.Length > 5 * 1024 * 1024 || datos[0] != 0xFF || datos[1] != 0xD8)
+                        throw new ErrorTmdb(415, "El cartel de TMDB no es una imagen JPEG");
+                    return datos;
+                }
+            }
+            catch (WebException e)
+            {
+                var r = e.Response as HttpWebResponse;
+                if (r != null) { int codigo = (int)r.StatusCode; r.Close(); throw new ErrorTmdb(codigo, "TMDB respondió " + codigo); }
+                throw new ErrorTmdb(0, "Sin conexión con TMDB");
+            }
         }
 
         /// <summary>Número de episodio → nombre, de una temporada.</summary>

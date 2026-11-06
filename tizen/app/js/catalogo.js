@@ -101,6 +101,7 @@ MC.crearCatalogo = function (r) {
         anio: f.anio || null,
         sinopsis: f.sinopsis || null,
         poster: f.poster || null,
+        generos: f.generos && f.generos.length ? f.generos : [],   // de TMDB (MiCine 1.4 o posterior)
         seccion: f.seccion || v.seccion || (serie ? 'series' : 'peliculas'),
         identificada: f.identificada !== false,
         videos: [],
